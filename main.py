@@ -1,5 +1,7 @@
 from app.core.startup import start
 from config.settings import APP_NAME, APP_VERSION
+from app.core.lifecycle import startup, shutdown
+
 
 
 def main():
@@ -8,7 +10,11 @@ def main():
 
     print(f"Version: {APP_VERSION}")
 
+    startup()
+
     start()
+
+    shutdown()
 
 
 if __name__ == "__main__":
