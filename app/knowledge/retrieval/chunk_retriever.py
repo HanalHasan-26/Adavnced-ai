@@ -4,17 +4,28 @@ from app.knowledge.chunking.chunk import KnowledgeChunk
 # Import persistent knowledge storage.
 from app.knowledge.storage import KnowledgeStorage
 
+# Import the chunk ranking component.
+from app.knowledge.retrieval.ranker import ChunkRanker
+
 
 # Create a component responsible for retrieving knowledge chunks.
 class ChunkRetriever:
 
     # Initialize the retriever.
-    def __init__(self, storage: KnowledgeStorage):
+    def __init__(
+        self,
+        storage: KnowledgeStorage,
+        ranker: ChunkRanker | None = None,
+    ):
 
         # Store the storage dependency.
         self.storage = storage
 
-    # Retrieve chunks that contain the requested query.
+        # Use the supplied ranker when one is provided.
+        # Otherwise create a default ranker.
+        self.ranker = ranker or ChunkRanker()
+
+    # Retrieve the most relevant chunks for a query.
     def retrieve(
         self,
         query: str,
@@ -32,30 +43,26 @@ class ChunkRetriever:
         if limit <= 0:
             raise ValueError("limit must be greater than 0.")
 
-        # Search through stored documents.
+        # Search through stored documents to find candidates.
         documents = self.storage.search(query)
 
-        # Store matching chunks.
-        matching_chunks: list[KnowledgeChunk] = []
+        # Store candidate chunks.
+        candidate_chunks: list[KnowledgeChunk] = []
 
         # Examine every matching document.
         for document in documents:
 
-            # Retrieve the chunks belonging to this document.
-            chunks = self.storage.get_chunks(str(document.id))
+            # Retrieve all chunks belonging to this document.
+            chunks = self.storage.get_chunks(
+                str(document.id)
+            )
 
-            # Check every chunk.
-            for chunk in chunks:
+            # Add the document's chunks to the candidates.
+            candidate_chunks.extend(chunks)
 
-                # Match the query against chunk content.
-                if query.lower() in chunk.content.lower():
-
-                    # Add the matching chunk.
-                    matching_chunks.append(chunk)
-
-                    # Stop once we have enough results.
-                    if len(matching_chunks) >= limit:
-                        return matching_chunks
-
-        # Return all matching chunks when fewer than the limit exist.
-        return matching_chunks
+        # Let the ranker determine which chunks are most relevant.
+        return self.ranker.rank(
+            query=query,
+            chunks=candidate_chunks,
+            limit=limit,
+        )
