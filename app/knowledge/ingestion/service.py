@@ -60,6 +60,25 @@ class KnowledgeIngestionService:
             source_type="pdf",
         )
 
+        # Ingest a supported file automatically based on its extension.
+    def ingest(self, file_path: Path) -> KnowledgeDocument:
+
+        # Convert the path to lowercase so extension checks are case-insensitive.
+        suffix = file_path.suffix.lower()
+
+        # Use the text loader for TXT files.
+        if suffix == ".txt":
+            return self.ingest_text_file(file_path)
+
+        # Use the PDF loader for PDF files.
+        if suffix == ".pdf":
+            return self.ingest_pdf_file(file_path)
+
+        # Reject file types that we don't support yet.
+        raise ValueError(
+            f"Unsupported file type: {file_path.suffix}"
+        )
+
     # Create and store a KnowledgeDocument.
     def _create_and_store_document(
         self,
