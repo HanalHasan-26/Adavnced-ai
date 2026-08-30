@@ -8,6 +8,7 @@ class TextChunker:
         overlap: int = 200,
     ):
 
+
         # Make sure the chunk size is a positive number.
         if chunk_size <= 0:
             raise ValueError("chunk_size must be greater than 0.")

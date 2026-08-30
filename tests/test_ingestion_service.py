@@ -16,6 +16,33 @@ from app.knowledge.ingestion.text_loader import TextLoader
 # Import the knowledge storage.
 from app.knowledge.storage import KnowledgeStorage
 
+# Import the text chunker.
+from app.knowledge.chunking.text_chunker import TextChunker
+
+
+# Create an ingestion service for tests.
+def create_service(database_path, chunker=None):
+
+    # Create the knowledge storage.
+    storage = KnowledgeStorage(database_path)
+
+    # Create the text loader.
+    text_loader = TextLoader()
+
+    # Create the PDF loader.
+    pdf_loader = PDFLoader()
+
+    # Create the ingestion service.
+    service = KnowledgeIngestionService(
+        storage=storage,
+        text_loader=text_loader,
+        pdf_loader=pdf_loader,
+        chunker=chunker,
+    )
+
+    # Return both objects so tests can inspect the database.
+    return service, storage
+
 
 # Test that a text file can be ingested and stored.
 def test_ingest_text_file(tmp_path):
@@ -29,26 +56,13 @@ def test_ingest_text_file(tmp_path):
         encoding="utf-8",
     )
 
-    # Create a temporary database for this test.
+    # Create a temporary database.
     database_path = tmp_path / "knowledge.db"
 
-    # Create the knowledge storage.
-    storage = KnowledgeStorage(database_path)
+    # Create the ingestion service.
+    service, storage = create_service(database_path)
 
-    # Create the text loader.
-    text_loader = TextLoader()
-
-    # Create the PDF loader.
-    pdf_loader = PDFLoader()
-
-    # Create the ingestion service with both loaders.
-    service = KnowledgeIngestionService(
-        storage=storage,
-        text_loader=text_loader,
-        pdf_loader=pdf_loader,
-    )
-
-    # Ingest the text file into the knowledge system.
+    # Ingest the text file.
     document = service.ingest_text_file(file_path)
 
     # Make sure the extracted content is correct.
@@ -87,21 +101,8 @@ def test_ingest_empty_text_file(tmp_path):
     # Create a temporary database.
     database_path = tmp_path / "knowledge.db"
 
-    # Create the knowledge storage.
-    storage = KnowledgeStorage(database_path)
-
-    # Create the text loader.
-    text_loader = TextLoader()
-
-    # Create the PDF loader.
-    pdf_loader = PDFLoader()
-
-    # Create the ingestion service with both loaders.
-    service = KnowledgeIngestionService(
-        storage=storage,
-        text_loader=text_loader,
-        pdf_loader=pdf_loader,
-    )
+    # Create the ingestion service.
+    service, _ = create_service(database_path)
 
     # Verify that empty knowledge is rejected.
     with pytest.raises(ValueError):
@@ -137,23 +138,10 @@ def test_ingest_pdf_file(tmp_path):
     # Create a temporary database.
     database_path = tmp_path / "knowledge.db"
 
-    # Create the knowledge storage.
-    storage = KnowledgeStorage(database_path)
+    # Create the ingestion service.
+    service, storage = create_service(database_path)
 
-    # Create the text loader.
-    text_loader = TextLoader()
-
-    # Create the PDF loader.
-    pdf_loader = PDFLoader()
-
-    # Create the ingestion service with both loaders.
-    service = KnowledgeIngestionService(
-        storage=storage,
-        text_loader=text_loader,
-        pdf_loader=pdf_loader,
-    )
-
-    # Ingest the PDF into the knowledge system.
+    # Ingest the PDF.
     document = service.ingest_pdf_file(file_path)
 
     # Make sure the PDF text was extracted.
@@ -174,7 +162,8 @@ def test_ingest_pdf_file(tmp_path):
     # Make sure the stored content matches the extracted content.
     assert stored_document.content == document.content
 
-    # Test that ingest() automatically detects and loads a TXT file.
+
+# Test that ingest() automatically detects and loads a TXT file.
 def test_ingest_txt_file(tmp_path):
 
     # Create a temporary TXT file.
@@ -189,21 +178,8 @@ def test_ingest_txt_file(tmp_path):
     # Create a temporary database.
     database_path = tmp_path / "knowledge.db"
 
-    # Create the storage system.
-    storage = KnowledgeStorage(database_path)
-
-    # Create the text loader.
-    text_loader = TextLoader()
-
-    # Create the PDF loader.
-    pdf_loader = PDFLoader()
-
     # Create the ingestion service.
-    service = KnowledgeIngestionService(
-        storage=storage,
-        text_loader=text_loader,
-        pdf_loader=pdf_loader,
-    )
+    service, storage = create_service(database_path)
 
     # Let the service automatically detect the TXT file.
     document = service.ingest(file_path)
@@ -215,6 +191,12 @@ def test_ingest_txt_file(tmp_path):
 
     # Make sure the source type was detected as text.
     assert document.source_type == "text"
+
+    # Make sure chunks were created.
+    chunks = storage.get_chunks(str(document.id))
+
+    # Make sure at least one chunk exists.
+    assert len(chunks) >= 1
 
 
 # Test that ingest() automatically detects a PDF file.
@@ -244,21 +226,8 @@ def test_ingest_pdf_automatically(tmp_path):
     # Create a temporary database.
     database_path = tmp_path / "knowledge.db"
 
-    # Create the storage system.
-    storage = KnowledgeStorage(database_path)
-
-    # Create the text loader.
-    text_loader = TextLoader()
-
-    # Create the PDF loader.
-    pdf_loader = PDFLoader()
-
     # Create the ingestion service.
-    service = KnowledgeIngestionService(
-        storage=storage,
-        text_loader=text_loader,
-        pdf_loader=pdf_loader,
-    )
+    service, storage = create_service(database_path)
 
     # Let the service automatically detect the PDF.
     document = service.ingest(file_path)
@@ -268,6 +237,12 @@ def test_ingest_pdf_automatically(tmp_path):
 
     # Make sure the source type was detected as PDF.
     assert document.source_type == "pdf"
+
+    # Make sure chunks were created.
+    chunks = storage.get_chunks(str(document.id))
+
+    # Make sure at least one chunk exists.
+    assert len(chunks) >= 1
 
 
 # Test that uppercase file extensions are supported.
@@ -285,21 +260,8 @@ def test_ingest_uppercase_extension(tmp_path):
     # Create a temporary database.
     database_path = tmp_path / "knowledge.db"
 
-    # Create the storage system.
-    storage = KnowledgeStorage(database_path)
-
-    # Create the text loader.
-    text_loader = TextLoader()
-
-    # Create the PDF loader.
-    pdf_loader = PDFLoader()
-
     # Create the ingestion service.
-    service = KnowledgeIngestionService(
-        storage=storage,
-        text_loader=text_loader,
-        pdf_loader=pdf_loader,
-    )
+    service, _ = create_service(database_path)
 
     # Ingest the file automatically.
     document = service.ingest(file_path)
@@ -315,29 +277,118 @@ def test_ingest_unsupported_file(tmp_path):
     file_path = tmp_path / "unsupported.jpg"
 
     # Create a small placeholder file.
-    file_path.write_bytes(b"not a supported knowledge file")
+    file_path.write_bytes(
+        b"not a supported knowledge file"
+    )
 
     # Create a temporary database.
     database_path = tmp_path / "knowledge.db"
 
-    # Create the storage system.
-    storage = KnowledgeStorage(database_path)
-
-    # Create the text loader.
-    text_loader = TextLoader()
-
-    # Create the PDF loader.
-    pdf_loader = PDFLoader()
-
     # Create the ingestion service.
-    service = KnowledgeIngestionService(
-        storage=storage,
-        text_loader=text_loader,
-        pdf_loader=pdf_loader,
-    )
+    service, _ = create_service(database_path)
 
     # Verify that unsupported file types are rejected.
     with pytest.raises(ValueError):
 
         # Try to ingest the unsupported file.
         service.ingest(file_path)
+
+
+# Test that ingestion creates the expected chunks.
+def test_ingestion_creates_chunks(tmp_path):
+
+    # Create a temporary text file.
+    file_path = tmp_path / "chunked.txt"
+
+    # Create enough text to make chunking observable.
+    content = (
+        "Python is a programming language. "
+        "Python is useful for artificial intelligence. "
+        "Machine learning uses data to discover patterns. "
+        "Neural networks are used in many AI systems."
+    )
+
+    # Write the content to the file.
+    file_path.write_text(
+        content,
+        encoding="utf-8",
+    )
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Use a small chunk size so the test definitely creates
+    # multiple chunks.
+    chunker = TextChunker(
+        chunk_size=50,
+        overlap=10,
+    )
+
+    # Create the ingestion service.
+    service, storage = create_service(
+        database_path,
+        chunker=chunker,
+    )
+
+    # Ingest the document.
+    document = service.ingest_text_file(file_path)
+
+    # Retrieve all chunks belonging to the document.
+    chunks = storage.get_chunks(str(document.id))
+
+    # Make sure multiple chunks were created.
+    assert len(chunks) > 1
+
+    # Make sure every chunk belongs to the same document.
+    assert all(
+        chunk.document_id == str(document.id)
+        for chunk in chunks
+    )
+
+    # Make sure chunk indexes start at zero.
+    assert chunks[0].chunk_index == 0
+
+    # Make sure indexes are sequential.
+    assert [chunk.chunk_index for chunk in chunks] == list(
+        range(len(chunks))
+    )
+
+    # Make sure every chunk contains actual content.
+    assert all(
+        chunk.content.strip()
+        for chunk in chunks
+    )
+
+
+# Test that a short document produces one chunk.
+def test_short_document_creates_one_chunk(tmp_path):
+
+    # Create a temporary text file.
+    file_path = tmp_path / "short.txt"
+
+    # Write a short piece of knowledge.
+    file_path.write_text(
+        "Artificial intelligence learns from data.",
+        encoding="utf-8",
+    )
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the ingestion service.
+    service, storage = create_service(database_path)
+
+    # Ingest the document.
+    document = service.ingest_text_file(file_path)
+
+    # Retrieve the chunks.
+    chunks = storage.get_chunks(str(document.id))
+
+    # A short document should fit inside one chunk.
+    assert len(chunks) == 1
+
+    # The first chunk should have index zero.
+    assert chunks[0].chunk_index == 0
+
+    # The chunk should contain the document content.
+    assert chunks[0].content == document.content

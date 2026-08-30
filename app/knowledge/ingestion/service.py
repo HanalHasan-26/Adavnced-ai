@@ -1,8 +1,17 @@
 # Import Path so we can work with file paths.
 from pathlib import Path
 
+# Import UUID so we can create unique IDs for knowledge chunks.
+from uuid import uuid4
+
 # Import our knowledge document model.
 from app.knowledge.document import KnowledgeDocument
+
+# Import our knowledge chunk model.
+from app.knowledge.chunking.chunk import KnowledgeChunk
+
+# Import our text chunker.
+from app.knowledge.chunking.text_chunker import TextChunker
 
 # Import our persistent knowledge storage.
 from app.knowledge.storage import KnowledgeStorage
@@ -23,6 +32,7 @@ class KnowledgeIngestionService:
         storage: KnowledgeStorage,
         text_loader: TextLoader,
         pdf_loader: PDFLoader,
+        chunker: TextChunker | None = None,
     ):
 
         # Store the knowledge storage dependency.
@@ -33,6 +43,10 @@ class KnowledgeIngestionService:
 
         # Store the PDF loader dependency.
         self.pdf_loader = pdf_loader
+
+        # Use the supplied chunker when one is provided.
+        # Otherwise create one with the default configuration.
+        self.chunker = chunker or TextChunker()
 
     # Ingest one text file into the knowledge database.
     def ingest_text_file(self, file_path: Path) -> KnowledgeDocument:
@@ -60,7 +74,7 @@ class KnowledgeIngestionService:
             source_type="pdf",
         )
 
-        # Ingest a supported file automatically based on its extension.
+    # Ingest a supported file automatically based on its extension.
     def ingest(self, file_path: Path) -> KnowledgeDocument:
 
         # Convert the path to lowercase so extension checks are case-insensitive.
@@ -79,7 +93,7 @@ class KnowledgeIngestionService:
             f"Unsupported file type: {file_path.suffix}"
         )
 
-    # Create and store a KnowledgeDocument.
+    # Create a document, split it into chunks, and store everything.
     def _create_and_store_document(
         self,
         content: str,
@@ -91,7 +105,9 @@ class KnowledgeIngestionService:
         if not content.strip():
 
             # Stop instead of storing empty knowledge.
-            raise ValueError("Cannot ingest a file with empty content.")
+            raise ValueError(
+                "Cannot ingest a file with empty content."
+            )
 
         # Create a new knowledge document.
         document = KnowledgeDocument.create(
@@ -102,6 +118,23 @@ class KnowledgeIngestionService:
 
         # Save the document permanently.
         self.storage.add(document)
+
+        # Split the document content into smaller chunks.
+        chunks = self.chunker.chunk(content)
+
+        # Create and store every chunk.
+        for chunk_index, chunk_content in enumerate(chunks):
+
+            # Create a KnowledgeChunk belonging to this document.
+            chunk = KnowledgeChunk(
+                id=str(uuid4()),
+                document_id=str(document.id),
+                chunk_index=chunk_index,
+                content=chunk_content,
+            )
+
+            # Save the chunk permanently.
+            self.storage.add_chunk(chunk)
 
         # Return the newly created document.
         return document
