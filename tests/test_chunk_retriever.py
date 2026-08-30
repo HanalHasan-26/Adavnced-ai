@@ -292,3 +292,403 @@ def test_retrieve_from_multiple_documents(tmp_path):
         "chunk-one",
         "chunk-two",
     }
+
+# Test that punctuation in a query is normalized.
+def test_retrieve_normalizes_punctuation(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage and retriever.
+    storage, retriever = create_retriever(database_path)
+
+    # Create a knowledge document.
+    document = KnowledgeDocument.create(
+        content="Support is a price level.",
+        source="trading.txt",
+        source_type="text",
+    )
+
+    # Store the document.
+    storage.add(document)
+
+    # Store a matching chunk.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-1",
+            document_id=str(document.id),
+            chunk_index=0,
+            content="Support is a price level.",
+        )
+    )
+
+    # Search using punctuation and extra whitespace.
+    results = retriever.retrieve(
+        "  SUPPORT!!!  "
+    )
+
+    # Make sure the normalized query still finds the chunk.
+    assert len(results) == 1
+
+    # Verify the correct chunk.
+    assert results[0].id == "chunk-1"
+
+
+# Test that repeated whitespace in a query is normalized.
+def test_retrieve_normalizes_repeated_whitespace(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage and retriever.
+    storage, retriever = create_retriever(database_path)
+
+    # Create a knowledge document.
+    document = KnowledgeDocument.create(
+        content="Support and resistance are important.",
+        source="trading.txt",
+        source_type="text",
+    )
+
+    # Store the document.
+    storage.add(document)
+
+    # Store a matching chunk.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-1",
+            document_id=str(document.id),
+            chunk_index=0,
+            content="Support and resistance are important.",
+        )
+    )
+
+    # Search with excessive whitespace.
+    results = retriever.retrieve(
+        "  support    and    resistance  "
+    )
+
+    # Verify that normalization allows the query to work.
+    assert len(results) == 1
+
+    # Verify the returned chunk.
+    assert results[0].id == "chunk-1"
+
+
+# Test that punctuation and case normalization work together.
+def test_retrieve_normalizes_case_and_punctuation(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage and retriever.
+    storage, retriever = create_retriever(database_path)
+
+    # Create a knowledge document.
+    document = KnowledgeDocument.create(
+        content="Gold and resistance are related concepts.",
+        source="gold.txt",
+        source_type="text",
+    )
+
+    # Store the document.
+    storage.add(document)
+
+    # Store a matching chunk.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-1",
+            document_id=str(document.id),
+            chunk_index=0,
+            content="Gold and resistance are related concepts.",
+        )
+    )
+
+    # Search using uppercase letters and punctuation.
+    results = retriever.retrieve(
+        "GOLD, AND RESISTANCE!!!"
+    )
+
+    # Verify that the normalized query finds the chunk.
+    assert len(results) == 1
+
+    # Verify the returned chunk.
+    assert results[0].id == "chunk-1"
+
+
+# Test that a query containing only punctuation returns no results.
+def test_retrieve_punctuation_only_query(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage and retriever.
+    _, retriever = create_retriever(database_path)
+
+    # Search using punctuation only.
+    results = retriever.retrieve(
+        "!!!???..."
+    )
+
+    # The normalized query becomes empty.
+    assert results == []
+
+# Test that a multi-term query can retrieve chunks
+# containing different terms.
+def test_retrieve_multi_term_query(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage and retriever.
+    storage, retriever = create_retriever(database_path)
+
+    # Create a knowledge document.
+    document = KnowledgeDocument.create(
+        content=(
+            "Support and resistance are important "
+            "technical analysis concepts."
+        ),
+        source="trading.txt",
+        source_type="text",
+    )
+
+    # Store the document.
+    storage.add(document)
+
+    # Add a chunk containing the first term.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-support",
+            document_id=str(document.id),
+            chunk_index=0,
+            content="Support is a price level.",
+        )
+    )
+
+    # Add a chunk containing the second term.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-resistance",
+            document_id=str(document.id),
+            chunk_index=1,
+            content="Resistance is another price level.",
+        )
+    )
+
+    # Search using both terms.
+    results = retriever.retrieve(
+        "support resistance",
+        limit=5,
+    )
+
+    # Both relevant chunks should be candidates.
+    result_ids = {chunk.id for chunk in results}
+
+    assert result_ids == {
+        "chunk-support",
+        "chunk-resistance",
+    }
+
+
+# Test that duplicate query terms do not create duplicate results.
+def test_retrieve_duplicate_terms_no_duplicate_chunks(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage and retriever.
+    storage, retriever = create_retriever(database_path)
+
+    # Create a document.
+    document = KnowledgeDocument.create(
+        content="Support is important.",
+        source="trading.txt",
+        source_type="text",
+    )
+
+    # Store the document.
+    storage.add(document)
+
+    # Add one matching chunk.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-1",
+            document_id=str(document.id),
+            chunk_index=0,
+            content="Support is important.",
+        )
+    )
+
+    # Search with the same term repeated.
+    results = retriever.retrieve(
+        "support support support",
+        limit=5,
+    )
+
+    # The same chunk should only appear once.
+    assert len(results) == 1
+
+    # Verify the returned chunk.
+    assert results[0].id == "chunk-1"
+
+
+# Test that punctuation does not prevent multi-term retrieval.
+def test_retrieve_multi_term_query_with_punctuation(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage and retriever.
+    storage, retriever = create_retriever(database_path)
+
+    # Create a document.
+    document = KnowledgeDocument.create(
+        content="Gold support and resistance.",
+        source="gold.txt",
+        source_type="text",
+    )
+
+    # Store the document.
+    storage.add(document)
+
+    # Add a chunk containing both concepts.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-1",
+            document_id=str(document.id),
+            chunk_index=0,
+            content="Gold support and resistance.",
+        )
+    )
+
+    # Search using punctuation and uppercase letters.
+    results = retriever.retrieve(
+        "GOLD, SUPPORT!!! RESISTANCE?",
+        limit=5,
+    )
+
+    # Verify that the chunk was found.
+    assert len(results) == 1
+
+    # Verify the returned chunk.
+    assert results[0].id == "chunk-1"
+
+# Test that a query containing only punctuation
+# returns no results through the full retriever.
+def test_retrieve_punctuation_only_after_normalization(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage and retriever.
+    _, retriever = create_retriever(database_path)
+
+    # Search using punctuation only.
+    results = retriever.retrieve(
+        "!!! ??? ..."
+    )
+
+    # The normalizer should produce an empty query.
+    assert results == []
+
+
+# Test that duplicate query terms do not cause
+# duplicate chunks in the final results.
+def test_retrieve_duplicate_terms_returns_unique_chunks(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage and retriever.
+    storage, retriever = create_retriever(database_path)
+
+    # Create a document.
+    document = KnowledgeDocument.create(
+        content="Support is an important trading concept.",
+        source="trading.txt",
+        source_type="text",
+    )
+
+    # Store the document.
+    storage.add(document)
+
+    # Add one matching chunk.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-1",
+            document_id=str(document.id),
+            chunk_index=0,
+            content="Support is an important trading concept.",
+        )
+    )
+
+    # Search with the same term multiple times.
+    results = retriever.retrieve(
+        "support support support",
+        limit=10,
+    )
+
+    # The chunk should appear only once.
+    assert len(results) == 1
+
+    # Verify the correct chunk.
+    assert results[0].id == "chunk-1"
+
+
+# Test that multiple terms can retrieve different chunks.
+def test_retrieve_multiple_terms_collects_candidates(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage and retriever.
+    storage, retriever = create_retriever(database_path)
+
+    # Create a document.
+    document = KnowledgeDocument.create(
+        content=(
+            "Support and resistance are common "
+            "technical analysis concepts."
+        ),
+        source="trading.txt",
+        source_type="text",
+    )
+
+    # Store the document.
+    storage.add(document)
+
+    # Add a support chunk.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-support",
+            document_id=str(document.id),
+            chunk_index=0,
+            content="Support is a price level.",
+        )
+    )
+
+    # Add a resistance chunk.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-resistance",
+            document_id=str(document.id),
+            chunk_index=1,
+            content="Resistance is a price level.",
+        )
+    )
+
+    # Search for both concepts.
+    results = retriever.retrieve(
+        "support resistance",
+        limit=10,
+    )
+
+    # Collect the returned IDs.
+    result_ids = {chunk.id for chunk in results}
+
+    # Both relevant chunks should be present.
+    assert result_ids == {
+        "chunk-support",
+        "chunk-resistance",
+    }
