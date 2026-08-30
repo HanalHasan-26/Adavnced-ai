@@ -10,8 +10,15 @@ from datetime import datetime
 # Import UUID so we can convert document IDs.
 from uuid import UUID
 
+# Import List for type annotations.
+# We use this because this class already has a method named "list".
+from typing import List
+
 # Import our knowledge document model.
 from app.knowledge.document import KnowledgeDocument
+
+# Import our knowledge chunk model.
+from app.knowledge.chunking.chunk import KnowledgeChunk
 
 # Import the project's data directory.
 from config.settings import DATA_DIR
@@ -33,7 +40,7 @@ class KnowledgeStorage:
         # Create the parent directory if it doesn't exist.
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Create the database table if it doesn't exist.
+        # Create the database tables if they don't exist.
         self._initialize_database()
 
     # Create the database structure.
@@ -42,11 +49,8 @@ class KnowledgeStorage:
         # Open a connection to the SQLite database.
         with sqlite3.connect(self.database_path) as connection:
 
-            # Create a cursor for executing SQL commands.
-            cursor = connection.cursor()
-
-            # Create the knowledge table if it doesn't exist.
-            cursor.execute(
+            # Create the main knowledge table.
+            connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS knowledge (
                     id TEXT PRIMARY KEY,
@@ -58,7 +62,22 @@ class KnowledgeStorage:
                 """
             )
 
-            # Save the database changes.
+            # Create the knowledge chunks table.
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_chunks (
+                    id TEXT PRIMARY KEY,
+                    document_id TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    FOREIGN KEY (document_id)
+                        REFERENCES knowledge(id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+
+            # Save the database structure.
             connection.commit()
 
     # Add a knowledge document to the database.
@@ -123,8 +142,8 @@ class KnowledgeStorage:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
-        # Search stored knowledge using a text query.
-    def search(self, query: str) -> list[KnowledgeDocument]:
+    # Search stored knowledge using a text query.
+    def search(self, query: str) -> List[KnowledgeDocument]:
 
         # Remove unnecessary spaces from the user's search query.
         query = query.strip()
@@ -167,10 +186,10 @@ class KnowledgeStorage:
             for row in rows
         ]
 
-        # Delete one knowledge document using its unique ID.
+    # Delete one knowledge document using its unique ID.
     def delete(self, document_id: str) -> bool:
 
-        # Open a connection to our SQLite database.
+        # Open a connection to the database.
         with sqlite3.connect(self.database_path) as connection:
 
             # Delete the document with the requested ID.
@@ -185,10 +204,10 @@ class KnowledgeStorage:
             # Save the deletion permanently.
             connection.commit()
 
-            # Check whether a document was actually deleted.
+            # Return True if a document was actually deleted.
             return cursor.rowcount > 0
 
-        # Update an existing knowledge document.
+    # Update an existing knowledge document.
     def update(self, document: KnowledgeDocument) -> bool:
 
         # Open a connection to the SQLite database.
@@ -219,10 +238,10 @@ class KnowledgeStorage:
             # Return True if a document was actually updated.
             return cursor.rowcount > 0
 
-        # Retrieve all knowledge documents from the database.
-    def list(self) -> list[KnowledgeDocument]:
+    # Retrieve all knowledge documents from the database.
+    def list(self) -> List[KnowledgeDocument]:
 
-        # Open a connection to the SQLite database.
+        # Open a connection to the database.
         with sqlite3.connect(self.database_path) as connection:
 
             # Make database rows accessible using column names.
@@ -248,3 +267,83 @@ class KnowledgeStorage:
             )
             for row in rows
         ]
+
+    # Add one knowledge chunk to the database.
+    def add_chunk(self, chunk: KnowledgeChunk) -> None:
+
+        # Open a connection to the database.
+        with sqlite3.connect(self.database_path) as connection:
+
+            # Insert the chunk into the chunks table.
+            connection.execute(
+                """
+                INSERT INTO knowledge_chunks (
+                    id,
+                    document_id,
+                    chunk_index,
+                    content
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    str(chunk.id),
+                    str(chunk.document_id),
+                    chunk.chunk_index,
+                    chunk.content,
+                ),
+            )
+
+            # Save the chunk permanently.
+            connection.commit()
+
+    # Retrieve all chunks belonging to one document.
+    def get_chunks(self, document_id: str) -> List[KnowledgeChunk]:
+
+        # Open a connection to the database.
+        with sqlite3.connect(self.database_path) as connection:
+
+            # Make database rows accessible using column names.
+            connection.row_factory = sqlite3.Row
+
+            # Retrieve chunks in their original document order.
+            rows = connection.execute(
+                """
+                SELECT id, document_id, chunk_index, content
+                FROM knowledge_chunks
+                WHERE document_id = ?
+                ORDER BY chunk_index ASC
+                """,
+                (document_id,),
+            ).fetchall()
+
+        # Convert database rows into KnowledgeChunk objects.
+        return [
+            KnowledgeChunk(
+                id=row["id"],
+                document_id=row["document_id"],
+                chunk_index=row["chunk_index"],
+                content=row["content"],
+            )
+            for row in rows
+        ]
+
+    # Delete all chunks belonging to one document.
+    def delete_chunks(self, document_id: str) -> int:
+
+        # Open a connection to the database.
+        with sqlite3.connect(self.database_path) as connection:
+
+            # Delete every chunk belonging to the document.
+            cursor = connection.execute(
+                """
+                DELETE FROM knowledge_chunks
+                WHERE document_id = ?
+                """,
+                (document_id,),
+            )
+
+            # Save the deletion permanently.
+            connection.commit()
+
+            # Return the number of chunks deleted.
+            return cursor.rowcount
