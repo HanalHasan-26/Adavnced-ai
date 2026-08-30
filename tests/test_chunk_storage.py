@@ -7,6 +7,8 @@ from app.knowledge.document import KnowledgeDocument
 # Import the storage system.
 from app.knowledge.storage import KnowledgeStorage
 
+import pytest
+
 
 # Test that a chunk can be saved and retrieved.
 def test_add_and_get_chunk(tmp_path):
@@ -224,3 +226,169 @@ def test_delete_chunks(tmp_path):
 
     # Verify that no chunks remain.
     assert storage.get_chunks(str(document.id)) == []
+
+# Test that search_chunks finds matching chunks.
+def test_search_chunks_finds_matching_chunks(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage system.
+    storage = KnowledgeStorage(database_path)
+
+    # Create a document.
+    document = KnowledgeDocument.create(
+        content="Support and resistance are trading concepts.",
+        source="trading.txt",
+        source_type="text",
+    )
+
+    # Save the document.
+    storage.add(document)
+
+    # Add a matching chunk.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-1",
+            document_id=str(document.id),
+            chunk_index=0,
+            content="Support is a price level.",
+        )
+    )
+
+    # Add a non-matching chunk.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-2",
+            document_id=str(document.id),
+            chunk_index=1,
+            content="Moving averages are indicators.",
+        )
+    )
+
+    # Search directly inside the chunks.
+    results = storage.search_chunks("support")
+
+    # Only the matching chunk should be returned.
+    assert len(results) == 1
+
+    # Verify the matching chunk.
+    assert results[0].id == "chunk-1"
+
+
+# Test that chunk search is case-insensitive.
+def test_search_chunks_is_case_insensitive(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage system.
+    storage = KnowledgeStorage(database_path)
+
+    # Create a document.
+    document = KnowledgeDocument.create(
+        content="Trading knowledge.",
+        source="trading.txt",
+        source_type="text",
+    )
+
+    # Save the document.
+    storage.add(document)
+
+    # Add a chunk containing lowercase text.
+    storage.add_chunk(
+        KnowledgeChunk(
+            id="chunk-1",
+            document_id=str(document.id),
+            chunk_index=0,
+            content="Support is important.",
+        )
+    )
+
+    # Search using uppercase text.
+    results = storage.search_chunks("SUPPORT")
+
+    # Verify that the chunk was found.
+    assert len(results) == 1
+    assert results[0].id == "chunk-1"
+
+
+# Test that an empty chunk-search query returns no results.
+def test_search_chunks_empty_query(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage system.
+    storage = KnowledgeStorage(database_path)
+
+    # Search using an empty query.
+    results = storage.search_chunks("")
+
+    # No chunks should be returned.
+    assert results == []
+
+
+# Test that chunk search respects the limit.
+def test_search_chunks_respects_limit(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage system.
+    storage = KnowledgeStorage(database_path)
+
+    # Create a document.
+    document = KnowledgeDocument.create(
+        content="Support knowledge.",
+        source="trading.txt",
+        source_type="text",
+    )
+
+    # Save the document.
+    storage.add(document)
+
+    # Add several matching chunks.
+    for index in range(5):
+
+        storage.add_chunk(
+            KnowledgeChunk(
+                id=f"chunk-{index}",
+                document_id=str(document.id),
+                chunk_index=index,
+                content=f"Support level {index}.",
+            )
+        )
+
+    # Request only two results.
+    results = storage.search_chunks(
+        "support",
+        limit=2,
+    )
+
+    # Verify that the limit is respected.
+    assert len(results) == 2
+
+
+# Test that invalid chunk-search limits are rejected.
+def test_search_chunks_invalid_limit(tmp_path):
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the storage system.
+    storage = KnowledgeStorage(database_path)
+
+    # Verify that zero is rejected.
+    with pytest.raises(ValueError):
+        storage.search_chunks(
+            "support",
+            limit=0,
+        )
+
+    # Verify that negative values are rejected.
+    with pytest.raises(ValueError):
+        storage.search_chunks(
+            "support",
+            limit=-1,
+        )

@@ -43,24 +43,15 @@ class ChunkRetriever:
         if limit <= 0:
             raise ValueError("limit must be greater than 0.")
 
-        # Search through stored documents to find candidates.
-        documents = self.storage.search(query)
+        # Search directly inside stored chunks.
+        # We retrieve more candidates than the final requested
+        # limit so the ranker has enough chunks to compare.
+        candidate_chunks = self.storage.search_chunks(
+            query=query,
+            limit=max(limit * 10, 50),
+        )
 
-        # Store candidate chunks.
-        candidate_chunks: list[KnowledgeChunk] = []
-
-        # Examine every matching document.
-        for document in documents:
-
-            # Retrieve all chunks belonging to this document.
-            chunks = self.storage.get_chunks(
-                str(document.id)
-            )
-
-            # Add the document's chunks to the candidates.
-            candidate_chunks.extend(chunks)
-
-        # Let the ranker determine which chunks are most relevant.
+        # Rank the candidate chunks by relevance.
         return self.ranker.rank(
             query=query,
             chunks=candidate_chunks,

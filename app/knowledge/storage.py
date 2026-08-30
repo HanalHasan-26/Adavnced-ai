@@ -327,6 +327,59 @@ class KnowledgeStorage:
             for row in rows
         ]
 
+    # Search knowledge chunks directly.
+    def search_chunks(
+        self,
+        query: str,
+        limit: int = 50,
+    ) -> List[KnowledgeChunk]:
+
+        # Remove unnecessary whitespace.
+        query = query.strip()
+
+        # Return no results for an empty query.
+        if not query:
+            return []
+
+        # Make sure the limit is valid.
+        if limit <= 0:
+            raise ValueError("limit must be greater than 0.")
+
+        # Add wildcard characters around the query.
+        search_pattern = f"%{query}%"
+
+        # Open a connection to the SQLite database.
+        with sqlite3.connect(self.database_path) as connection:
+
+            # Make database rows accessible using column names.
+            connection.row_factory = sqlite3.Row
+
+            # Search directly inside chunk content.
+            rows = connection.execute(
+                """
+                SELECT id, document_id, chunk_index, content
+                FROM knowledge_chunks
+                WHERE content LIKE ?
+                ORDER BY document_id ASC, chunk_index ASC
+                LIMIT ?
+                """,
+                (
+                    search_pattern,
+                    limit,
+                ),
+            ).fetchall()
+
+        # Convert database rows into KnowledgeChunk objects.
+        return [
+            KnowledgeChunk(
+                id=row["id"],
+                document_id=row["document_id"],
+                chunk_index=row["chunk_index"],
+                content=row["content"],
+            )
+            for row in rows
+        ]
+
     # Delete all chunks belonging to one document.
     def delete_chunks(self, document_id: str) -> int:
 
