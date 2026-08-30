@@ -1,0 +1,31 @@
+TRADING BASICS
+
+Support and Resistance
+
+Support is a price area where buying interest may appear and where price may find difficulty moving lower.
+
+Resistance is a price area where selling interest may appear and where price may find difficulty moving higher.
+
+Order Blocks
+
+In price-action and institutional-trading terminology, an order block generally refers to a price area associated with significant buying or selling activity. Traders commonly use the term to describe an area from which price made a notable move.
+
+Liquidity
+
+Liquidity in trading refers to the availability of buyers and sellers that allows transactions to take place. Traders using liquidity-based price-action approaches may refer to areas around previous highs and lows where orders may be concentrated.
+
+Break of Structure
+
+A Break of Structure (BOS) generally refers to price breaking an important previous swing high or swing low. Traders may use BOS as evidence that the existing market structure has changed or continued.
+
+Change of Character
+
+Change of Character (CHOCH) is a term used by some price-action traders to describe a potential shift in market structure or directional behavior.
+
+Fair Value Gap
+
+A Fair Value Gap (FVG) is commonly used in price-action trading to describe an imbalance in price movement, often identified using a three-candle pattern where part of the price range between candles is not overlapped.
+
+Supply and Demand
+
+A supply zone is an area where selling pressure may become significant. A demand zone is an area where buying pressure may become significant.

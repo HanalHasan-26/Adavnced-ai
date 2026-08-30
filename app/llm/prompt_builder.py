@@ -43,15 +43,16 @@ class PromptBuilder:
 
         # Build a prompt when no knowledge was retrieved.
         return (
-            "You are a helpful local AI assistant.\n"
-            "\n"
-            "Answer the user's question as accurately as "
-            "possible.\n"
-            "If you do not know the answer, clearly say so "
-            "instead of inventing information.\n"
-            "\n"
-            "User question:\n"
-            f"{query}\n"
-            "\n"
-            "Answer:"
+    "You are a helpful local AI assistant.\n"
+    "\n"
+    "No relevant knowledge was retrieved for this question.\n"
+    "Answer the user's question as accurately as "
+    "possible.\n"
+    "If you do not know the answer, clearly say so "
+    "instead of inventing information.\n"
+    "\n"
+    "User question:\n"
+    f"{query}\n"
+    "\n"
+    "Answer:"
         )
