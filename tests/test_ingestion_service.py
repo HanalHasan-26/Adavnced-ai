@@ -2,7 +2,7 @@
 from app.knowledge.ingestion.service import KnowledgeIngestionService
 from app.knowledge.ingestion.text_loader import TextLoader
 from app.knowledge.storage import KnowledgeStorage
-
+import pytest
 
 # Test that a text file can be ingested and stored.
 def test_ingest_text_file(tmp_path):
@@ -53,3 +53,36 @@ def test_ingest_text_file(tmp_path):
 
     # Make sure the stored content matches the original.
     assert stored_document.content == document.content
+
+# Test that an empty text file is rejected.
+def test_ingest_empty_text_file(tmp_path):
+
+    # Create a temporary empty text file.
+    file_path = tmp_path / "empty.txt"
+
+    # Write only whitespace into the file.
+    file_path.write_text(
+        "   \n   \n   ",
+        encoding="utf-8",
+    )
+
+    # Create a temporary database.
+    database_path = tmp_path / "knowledge.db"
+
+    # Create the knowledge storage.
+    storage = KnowledgeStorage(database_path)
+
+    # Create the text loader.
+    text_loader = TextLoader()
+
+    # Create the ingestion service.
+    service = KnowledgeIngestionService(
+        storage=storage,
+        text_loader=text_loader,
+    )
+
+    # Verify that empty knowledge is rejected.
+    with pytest.raises(ValueError):
+
+        # Try to ingest the empty file.
+        service.ingest_text_file(file_path)

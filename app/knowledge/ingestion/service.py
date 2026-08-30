@@ -33,13 +33,19 @@ class KnowledgeIngestionService:
         # Read the contents of the text file.
         content = self.text_loader.load(file_path)
 
+        # Check whether the file contains any meaningful text.
+        if not content.strip():
+
+            # Reject the file instead of storing empty knowledge.
+            raise ValueError("Cannot ingest an empty text file.")
+
         # Create a KnowledgeDocument from the extracted text.
         document = KnowledgeDocument.create(
             content=content,
             source=str(file_path),
             source_type="text",
         )
-
+        
         # Save the document into persistent storage.
         self.storage.add(document)
 
