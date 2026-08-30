@@ -8,8 +8,8 @@ from app.knowledge.retrieval.prompt_builder import KnowledgePromptBuilder
 from app.knowledge.retrieval.result import KnowledgeRetrievalResult
 
 
-# Create the service that connects knowledge retrieval
-# with prompt construction.
+# Create the service responsible for knowledge retrieval
+# and prompt preparation.
 class KnowledgeAssistant:
 
     # Initialize the knowledge assistant.
@@ -18,6 +18,12 @@ class KnowledgeAssistant:
         pipeline: KnowledgeRetrievalPipeline,
         prompt_builder: KnowledgePromptBuilder | None = None,
     ):
+
+        # Make sure a retrieval pipeline was supplied.
+        if pipeline is None:
+            raise ValueError(
+                "pipeline cannot be None."
+            )
 
         # Store the retrieval pipeline.
         self.pipeline = pipeline
@@ -29,20 +35,23 @@ class KnowledgeAssistant:
             or KnowledgePromptBuilder()
         )
 
-    # Prepare a knowledge-aware prompt for a user question.
+    # Prepare a knowledge-aware prompt.
     def prepare(
         self,
         query: str,
         limit: int = 5,
     ) -> str:
 
-        # Reject empty queries before starting retrieval.
-        if not query.strip():
+        # Remove unnecessary whitespace.
+        query = query.strip()
+
+        # Reject an empty query.
+        if not query:
             raise ValueError(
                 "query cannot be empty."
             )
 
-        # Run the knowledge retrieval pipeline.
+        # Retrieve relevant knowledge.
         result: KnowledgeRetrievalResult = (
             self.pipeline.run(
                 query=query,
@@ -50,23 +59,32 @@ class KnowledgeAssistant:
             )
         )
 
-        # Build the final prompt using the retrieved context.
+        # Build the final prompt.
         return self.prompt_builder.build(
             query=result.query,
             context=result.context,
         )
 
-    # Retrieve knowledge and return the complete retrieval result.
+    # Retrieve knowledge and return the complete result.
     def retrieve(
         self,
         query: str,
         limit: int = 5,
     ) -> KnowledgeRetrievalResult:
 
-        # Reject empty queries.
-        if not query.strip():
+        # Remove unnecessary whitespace.
+        query = query.strip()
+
+        # Reject an empty query.
+        if not query:
             raise ValueError(
                 "query cannot be empty."
+            )
+
+        # Make sure the limit is valid.
+        if limit <= 0:
+            raise ValueError(
+                "limit must be greater than 0."
             )
 
         # Run the retrieval pipeline.
