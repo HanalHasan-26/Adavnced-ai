@@ -5,14 +5,6 @@ class ConversationMemory:
     """
     Manages conversation messages on top of the project's
     persistent Memory storage.
-
-    Supports:
-
-        ConversationMemory()
-
-    and:
-
-        ConversationMemory(memory=FakeMemory())
     """
 
     def __init__(
@@ -122,8 +114,7 @@ class ConversationMemory:
                 "limit must be greater than 0."
             )
 
-        # Preferred path:
-        # The real Memory class provides list().
+        # Prefer the real Memory.list() method.
         if hasattr(self.memory, "list"):
 
             memories = self.memory.list()
@@ -133,15 +124,13 @@ class ConversationMemory:
                 # Memory.list() returns newest first.
                 return memories[:limit]
 
-        # Test doubles may expose their records directly.
+        # Support simple fake/test memory objects.
         if hasattr(self.memory, "memories"):
 
             memories = self.memory.memories
 
             if isinstance(memories, list):
 
-                # If records are stored oldest first,
-                # take the newest records.
                 return memories[-limit:]
 
         return []
@@ -171,24 +160,23 @@ class ConversationMemory:
                 "limit must be greater than 0."
             )
 
-        # IMPORTANT:
+        # -----------------------------------------------------
+        # IMPORTANT
         #
-        # Conversation context should use recent
-        # conversation history instead of searching
-        # for words matching the current question.
+        # Conversation context must NOT be searched using the
+        # current query.
         #
         # Example:
         #
-        # User:
-        #     My name is Pirlo.
+        # User: My name is Hanal.
+        # User: What's my name?
         #
-        # Later:
-        #     What's my name?
+        # "What's my name?" does not literally match
+        # "My name is Hanal."
         #
-        # A normal text search for "What's my name?"
-        # will NOT reliably find "My name is Pirlo."
-        #
-        # Therefore we use recent conversation history.
+        # Therefore we retrieve recent conversation history
+        # instead of using semantic-less SQL LIKE search.
+        # -----------------------------------------------------
 
         memories = self.recall_recent(
             limit=limit,
@@ -230,10 +218,8 @@ class ConversationMemory:
         if not sections:
             return ""
 
-        # recall_recent() returns newest first.
-        #
-        # Reverse the records so the LLM sees the
-        # conversation in normal chronological order.
+        # Memory.list() returns newest first.
+        # Reverse so the conversation is chronological.
         sections.reverse()
 
         return "\n".join(
