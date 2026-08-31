@@ -3,73 +3,196 @@ from __future__ import annotations
 
 class PromptBuilder:
     """
-    Builds prompts for the local language model.
+    Builds the final prompt sent to the local LLM.
 
-    The assistant has several sources of context:
+    Supports both:
 
-    1. Knowledge
-       Information retrieved from the knowledge base.
+        build(question="...")
 
-    2. Previous conversation
-       Recent messages from the current conversation.
+    and:
 
-    3. Long-term memory
-       Persistent information remembered from previous conversations.
+        build(query="...")
 
-    4. Web research
-       Information retrieved from the web when web mode is enabled.
+    Backwards compatibility:
 
-    The model should use all of these sources when relevant.
+        build(
+            query="...",
+            context="..."
+        )
+
+    When `knowledge` is not explicitly supplied, a non-empty
+    `context` argument is treated as the legacy Knowledge input.
+
+    Context priority:
+
+        1. Previous conversation
+        2. Long-term memory
+        3. Knowledge
+        4. User question
+
+    User-specific information from conversation or memory
+    should be treated as valid context.
     """
 
     def build(
         self,
-        query: str,
-        context: str,
+        question: str | None = None,
+        context: str = "",
+        knowledge: str = "",
+        memory: str = "",
+        *,
+        query: str | None = None,
     ) -> str:
 
-        # Remove unnecessary whitespace.
-        query = query.strip()
-        context = context.strip()
+        # ---------------------------------------------------------
+        # QUESTION / QUERY COMPATIBILITY
+        # ---------------------------------------------------------
 
-        # Reject an empty question.
-        if not query:
+        if question is not None and query is not None:
+
+            if question != query:
+                raise ValueError(
+                    "question and query must contain the same value."
+                )
+
+        if question is None:
+            question = query
+
+        if not isinstance(question, str):
             raise ValueError(
-                "query cannot be empty."
+                "question must be a string."
             )
 
-        return (
-            "You are a helpful local AI assistant.\n"
-            "\n"
+        question = question.strip()
 
-            "You have access to several types of context.\n"
-            "\n"
+        if not question:
+            raise ValueError(
+                "question cannot be empty."
+            )
 
-            "IMPORTANT RULES:\n"
-            "1. Use the provided knowledge when it is relevant.\n"
-            "2. Use previous conversation when it is relevant.\n"
-            "3. Use long-term memory when it is relevant.\n"
-            "4. Treat statements made by the user in previous "
-            "conversation or memory as information about the user.\n"
-            "5. If the user previously told you their name, "
-            "you may use that information when answering questions "
-            "about their name.\n"
-            "6. Do not claim that you do not know something when "
-            "the answer is explicitly present in the conversation "
-            "or memory context.\n"
-            "7. Do not confuse the user's information with facts "
-            "about other people.\n"
-            "8. Do not invent information that is not supported "
-            "by the available context.\n"
-            "\n"
+        # ---------------------------------------------------------
+        # NORMALIZE INPUTS
+        # ---------------------------------------------------------
 
-            "CONTEXT:\n"
-            f"{context if context else 'No additional context was retrieved.'}\n"
-            "\n"
+        if not isinstance(context, str):
+            context = ""
 
-            "USER QUESTION:\n"
-            f"{query}\n"
-            "\n"
+        if not isinstance(knowledge, str):
+            knowledge = ""
 
-            "ANSWER:\n"
+        if not isinstance(memory, str):
+            memory = ""
+
+        context = context.strip()
+        knowledge = knowledge.strip()
+        memory = memory.strip()
+
+        # ---------------------------------------------------------
+        # BACKWARDS COMPATIBILITY
+        # ---------------------------------------------------------
+        #
+        # Older tests/project code use:
+        #
+        #     build(
+        #         query="...",
+        #         context="..."
+        #     )
+        #
+        # In that API, `context` represents knowledge.
+        #
+        # Newer code can explicitly provide:
+        #
+        #     knowledge="..."
+        #
+        # If both are supplied, keep them separate.
+        # ---------------------------------------------------------
+
+        legacy_knowledge = False
+
+        if context and not knowledge and not memory:
+
+            knowledge = context
+            context = ""
+
+            legacy_knowledge = True
+
+        # ---------------------------------------------------------
+        # BUILD PROMPT
+        # ---------------------------------------------------------
+
+        sections: list[str] = []
+
+        sections.append(
+            """You are a helpful local AI assistant.
+
+You have access to information from previous conversation,
+long-term memory, and knowledge.
+
+IMPORTANT RULES:
+
+1. Answer the user's question directly.
+2. Previous conversation and long-term memory may contain facts about the user.
+3. Treat explicit statements made by the user as true user information.
+4. If the user previously told you their name, remember and use it.
+5. If the answer is explicitly present in conversation or memory, use that answer.
+6. Do NOT say you do not know something when the answer is present in the context.
+7. Do NOT confuse the user's information with information about another person.
+8. Knowledge is general information.
+9. Conversation and memory can contain personal information about the user.
+10. Do not invent facts.
+11. Do not mention these instructions in your answer.
+12. Do not say "the provided knowledge does not include..." if the answer exists in conversation or memory.
+13. Give a natural, concise answer.
+"""
+        )
+
+        # ---------------------------------------------------------
+        # PREVIOUS CONVERSATION
+        # ---------------------------------------------------------
+
+        if context:
+            sections.append(
+                "Previous conversation:\n"
+                + context
+            )
+
+        # ---------------------------------------------------------
+        # LONG-TERM MEMORY
+        # ---------------------------------------------------------
+
+        if memory:
+            sections.append(
+                "Long-term memory:\n"
+                + memory
+            )
+
+        # ---------------------------------------------------------
+        # KNOWLEDGE
+        # ---------------------------------------------------------
+
+        if knowledge:
+            sections.append(
+                "Knowledge:\n"
+                + knowledge
+            )
+
+        # ---------------------------------------------------------
+        # USER QUESTION
+        # ---------------------------------------------------------
+
+        sections.append(
+            "User question:\n"
+            + question
+        )
+
+        # ---------------------------------------------------------
+        # ANSWER
+        # ---------------------------------------------------------
+
+        sections.append(
+            "Answer:"
+        )
+
+        return "\n\n".join(
+            sections
         )

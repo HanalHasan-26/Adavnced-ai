@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 # Import the retrieval pipeline.
 from app.knowledge.retrieval.pipeline import (
     KnowledgeRetrievalPipeline,
@@ -357,6 +359,160 @@ class KnowledgeAssistant:
         )
 
     # =========================================================
+    # AUTHORITATIVE USER FACTS
+    # =========================================================
+
+    def _build_authoritative_user_context(self) -> str:
+        """
+        Extract explicit facts stated by the user.
+
+        User messages are authoritative for personal information.
+        Assistant-generated answers are deliberately ignored.
+
+        The newest explicit user statement wins when the same
+        fact has previously been stated differently.
+        """
+
+        memory = getattr(
+            self.conversation_memory,
+            "memory",
+            None,
+        )
+
+        if memory is None or not hasattr(memory, "list"):
+            return ""
+
+        try:
+            records = memory.list()
+        except Exception:
+            return ""
+
+        if not isinstance(records, list):
+            return ""
+
+        # Memory.list() normally returns newest first.
+        # Sort by timestamp when available so this also works
+        # with memory implementations that return another order.
+        def record_time(record: dict) -> str:
+            if not isinstance(record, dict):
+                return ""
+            value = record.get("created_at", "")
+            return value if isinstance(value, str) else ""
+
+        records = sorted(
+            records,
+            key=record_time,
+            reverse=True,
+        )
+
+        # ---------------------------------------------------------
+        # NAME
+        # ---------------------------------------------------------
+
+        # Match the name itself without swallowing the rest of a
+        # natural-language sentence.
+        #
+        # Examples:
+        #
+        #   My name is Hanal.
+        #       -> Hanal
+        #
+        #   My name is Hanal, remember that.
+        #       -> Hanal
+        #
+        #   My name is Hanal u got it?
+        #       -> Hanal
+        #
+        #   My actual name is Hanal Hasan.
+        #       -> Hanal Hasan
+        #
+        # The look-ahead stops the name at punctuation or common
+        # follow-up phrases instead of storing the entire sentence.
+        name_patterns = [
+            re.compile(
+                r"^\s*(?:my\s+name\s+is|my\s+actual\s+name\s+is)"
+                r"\s+([A-Za-z][A-Za-z'-]*"
+                r"(?:\s+[A-Za-z][A-Za-z'-]*){0,3})"
+                r"(?=\s*(?:[,!?\.]|$)"
+                r"|\s+(?:u|you)\s+got\b"
+                r"|\s+(?:remember|right|okay|ok)\b)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"^\s*(?:i\s+am|i'm|im)"
+                r"\s+([A-Za-z][A-Za-z'-]*"
+                r"(?:\s+[A-Za-z][A-Za-z'-]*){0,3})"
+                r"(?=\s*(?:[,!?\.]|$)"
+                r"|\s+(?:u|you)\s+got\b"
+                r"|\s+(?:remember|right|okay|ok)\b)",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"^\s*(?:call\s+me)"
+                r"\s+([A-Za-z][A-Za-z'-]*"
+                r"(?:\s+[A-Za-z][A-Za-z'-]*){0,3})"
+                r"(?=\s*(?:[,!?\.]|$)"
+                r"|\s+(?:u|you)\s+got\b"
+                r"|\s+(?:remember|right|okay|ok)\b)",
+                re.IGNORECASE,
+            ),
+        ]
+
+        latest_name: str | None = None
+
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+
+            content = record.get("content", "")
+
+            if not isinstance(content, str):
+                continue
+
+            content = content.strip()
+
+            # Only explicit USER records can establish user facts.
+            if not content.lower().startswith("user:"):
+                continue
+
+            message = content[5:].strip()
+
+            # Ignore nested console prefixes such as:
+            # "User: You: My name is Hanal."
+            while message.lower().startswith("you:"):
+                message = message[4:].strip()
+
+            for pattern in name_patterns:
+                match = pattern.match(message)
+
+                if match:
+                    candidate = match.group(1).strip()
+
+                    # Do not accept obviously negative statements.
+                    if candidate.lower() not in {
+                        "not",
+                        "unknown",
+                    }:
+                        latest_name = candidate
+
+                    break
+
+            # Newest matching user statement wins.
+            if latest_name is not None:
+                break
+
+        if latest_name is None:
+            return ""
+
+        return (
+            "AUTHORITATIVE USER FACTS:\n"
+            f"- The user's current name is {latest_name}.\n"
+            "- This fact comes from the user's own explicit statement.\n"
+            "- If older conversation or assistant responses contain a "
+            "different name, ignore the older conflicting information.\n"
+        )
+
+    # =========================================================
     # PREPARE PROMPT
     # =========================================================
 
@@ -419,6 +575,20 @@ class KnowledgeAssistant:
             context_parts.append(
                 "Previous conversation:\n"
                 f"{conversation_context}"
+            )
+
+        # -----------------------------------------------------
+        # AUTHORITATIVE USER FACTS
+        # -----------------------------------------------------
+
+        user_fact_context = (
+            self._build_authoritative_user_context()
+        )
+
+        if user_fact_context:
+
+            context_parts.append(
+                user_fact_context
             )
 
         # -----------------------------------------------------
