@@ -1,195 +1,196 @@
-# Import JSON so we can decode Ollama responses.
+# Import JSON so we can decode Ollama's response.
 import json
 
-# Import urllib for HTTP communication without
-# requiring a third-party Python package.
+# Import urllib tools for making HTTP requests.
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-# Import the local model backend interface.
-from app.llm.local_backend import LocalModelBackend
 
+class OllamaBackend:
+    """
+    Local Ollama LLM backend.
 
-# Create a backend that communicates with Ollama.
-class OllamaBackend(LocalModelBackend):
+    Communicates directly with the Ollama HTTP API
+    without requiring a third-party Python client.
+    """
 
-    # Initialize the Ollama backend.
     def __init__(
         self,
         model: str,
-        base_url: str = "http://localhost:11434",
+        base_url: str = "http://127.0.0.1:11434",
         timeout: float = 120.0,
-    ):
+    ) -> None:
 
-        # Remove unnecessary whitespace from the model name.
-        model = model.strip()
-
-        # Reject an empty model name.
-        if not model:
+        # Make sure the model name is valid.
+        if not isinstance(model, str) or not model.strip():
             raise ValueError(
-                "model cannot be empty."
+                "model must be a non-empty string"
             )
 
-        # Remove trailing slashes from the URL.
-        base_url = base_url.rstrip("/")
-
-        # Reject an empty URL.
-        if not base_url:
+        # Make sure the base URL is valid.
+        if not isinstance(base_url, str) or not base_url.strip():
             raise ValueError(
-                "base_url cannot be empty."
+                "base_url must be a non-empty string"
             )
 
-        # Make sure the timeout is positive.
+        # Make sure timeout is positive.
         if timeout <= 0:
             raise ValueError(
-                "timeout must be greater than 0."
+                "timeout must be greater than zero"
             )
 
-        # Store the model name.
-        self.model = model
+        # Store the Ollama model name.
+        self.model = model.strip()
 
-        # Store the Ollama base URL.
-        self.base_url = base_url
+        # Remove unnecessary trailing slashes.
+        self.base_url = base_url.rstrip("/")
 
-        # Store the request timeout.
+        # Store the HTTP timeout.
         self.timeout = timeout
 
-    # Generate text using Ollama.
-    def generate(
-        self,
-        prompt: str,
-    ) -> str:
+    def generate(self, prompt: str) -> str:
+        """
+        Generate a response from Ollama.
+        """
+
+        # Validate the prompt.
+        if not isinstance(prompt, str):
+            raise TypeError(
+                "prompt must be a string"
+            )
 
         # Remove unnecessary whitespace.
         prompt = prompt.strip()
 
-        # Reject an empty prompt.
+        # Do not send an empty prompt to Ollama.
         if not prompt:
             raise ValueError(
-                "prompt cannot be empty."
+                "prompt cannot be empty"
             )
 
-        # Prepare the request payload.
-        payload = json.dumps(
-            {
-                "model": self.model,
-                "prompt": prompt,
-                "stream": False,
-            }
-        ).encode("utf-8")
+        # Ollama generation endpoint.
+        url = f"{self.base_url}/api/generate"
 
-        # Build the HTTP request.
+        # Build the request payload.
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+        }
+
+        # Convert the payload to JSON bytes.
+        data = json.dumps(payload).encode("utf-8")
+
+        # Create the HTTP request.
         request = Request(
-            url=f"{self.base_url}/api/generate",
-            data=payload,
+            url=url,
+            data=data,
             headers={
                 "Content-Type": "application/json",
             },
             method="POST",
         )
 
-        # Send the request to Ollama.
         try:
 
+            # Send the request to Ollama.
             with urlopen(
                 request,
                 timeout=self.timeout,
             ) as response:
 
-                # Read and decode the response.
-                raw_response = (
-                    response
-                    .read()
-                    .decode("utf-8")
-                )
+                # Read the response body.
+                raw_response = response.read()
 
-        # IMPORTANT:
-        # HTTPError is a subclass of URLError,
-        # so HTTPError must be handled first.
         except HTTPError as error:
 
-            # Try to read Ollama's error response.
-            try:
-
-                error_body = (
-                    error
-                    .read()
-                    .decode("utf-8")
-                    .strip()
-                )
-
-            except Exception:
-
-                error_body = ""
-
-            # Include Ollama's message when available.
-            if error_body:
-
-                raise RuntimeError(
-                    f"Ollama request failed "
-                    f"({error.code}): {error_body}"
-                ) from error
-
-            # Otherwise report the HTTP status.
+            # Handle HTTP-level errors.
             raise RuntimeError(
-                f"Ollama request failed "
-                f"with HTTP {error.code}."
+                f"Ollama request failed: HTTP {error.code}"
             ) from error
 
-        # Handle connection failures.
         except URLError as error:
 
+            # Handle connection and URL errors.
+            raise RuntimeError(
+                f"Unable to connect to Ollama: {error.reason}"
+            ) from error
+
+        except TimeoutError as error:
+
+            # Handle request timeout.
+            raise RuntimeError(
+                "Ollama request timed out"
+            ) from error
+
+        except OSError as error:
+
+            # Handle lower-level network errors.
             raise RuntimeError(
                 f"Unable to connect to Ollama: {error}"
             ) from error
 
-        # Decode the JSON response.
+        # Decode the response as UTF-8.
         try:
 
-            result = json.loads(
-                raw_response
+            response_text = raw_response.decode(
+                "utf-8"
+            )
+
+        except UnicodeDecodeError as error:
+
+            raise RuntimeError(
+                "Ollama returned invalid UTF-8 data"
+            ) from error
+
+        # Parse the JSON response.
+        try:
+
+            response_data = json.loads(
+                response_text
             )
 
         except json.JSONDecodeError as error:
 
             raise RuntimeError(
-                "Ollama returned invalid JSON."
+                "Ollama returned invalid JSON"
             ) from error
 
-        # Make sure the response is a JSON object.
-        if not isinstance(result, dict):
+        # Make sure Ollama returned an object.
+        if not isinstance(response_data, dict):
 
             raise RuntimeError(
-                "Ollama returned an invalid response."
+                "Ollama returned an invalid response type"
             )
 
         # Extract the generated response.
-        generated_text = result.get(
+        response = response_data.get(
             "response"
         )
 
-        # Make sure Ollama returned text.
-        if not isinstance(
-            generated_text,
-            str,
-        ):
+        # Make sure the response field exists.
+        if response is None:
 
             raise RuntimeError(
-                "Ollama response did not contain "
-                "a valid 'response' field."
+                "Ollama response is missing the 'response' field"
             )
 
-        # Clean the generated response.
-        generated_text = (
-            generated_text.strip()
-        )
-
-        # Reject an empty model response.
-        if not generated_text:
+        # Make sure the response is a string.
+        if not isinstance(response, str):
 
             raise RuntimeError(
-                "Ollama returned an empty response."
+                "Ollama response must be a string"
             )
 
-        # Return the generated text.
-        return generated_text
+        # Remove unnecessary whitespace.
+        response = response.strip()
+
+        # Reject an empty response.
+        if not response:
+
+            raise RuntimeError(
+                "Ollama returned an empty response"
+            )
+
+        # Return the generated answer.
+        return response

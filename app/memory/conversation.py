@@ -1,101 +1,241 @@
-# Import the persistent memory system.
-from app.memory.memory import Memory
+from __future__ import annotations
 
 
-# Create a component responsible for storing
-# and retrieving conversation messages.
 class ConversationMemory:
+    """
+    Manages conversation messages on top of the project's
+    persistent Memory storage.
 
-    # Initialize conversation memory.
+    Supports:
+
+        ConversationMemory()
+
+    and:
+
+        ConversationMemory(memory=FakeMemory())
+    """
+
     def __init__(
         self,
-        memory: Memory | None = None,
+        memory=None,
     ):
+        # Use the real persistent Memory implementation
+        # when no memory object is supplied.
+        if memory is None:
+            from app.memory.memory import Memory
 
-        # Use the supplied memory system when provided.
-        # Otherwise create the default persistent memory system.
-        self.memory = memory or Memory()
+            memory = Memory()
 
-    # Save a user message.
+        self.memory = memory
+
+    # ---------------------------------------------------------
+    # SAVE USER MESSAGE
+    # ---------------------------------------------------------
+
     def save_user_message(
         self,
         message: str,
     ) -> str:
 
-        # Remove unnecessary whitespace.
+        if not isinstance(message, str):
+            raise ValueError(
+                "message must be a string."
+            )
+
         message = message.strip()
 
-        # Reject an empty message.
         if not message:
             raise ValueError(
                 "message cannot be empty."
             )
 
-        # Store the message with a clear role prefix.
         return self.memory.add(
             f"User: {message}"
         )
 
-    # Save an assistant response.
+    # ---------------------------------------------------------
+    # SAVE ASSISTANT MESSAGE
+    # ---------------------------------------------------------
+
     def save_assistant_message(
         self,
         message: str,
     ) -> str:
 
-        # Remove unnecessary whitespace.
+        if not isinstance(message, str):
+            raise ValueError(
+                "message must be a string."
+            )
+
         message = message.strip()
 
-        # Reject an empty message.
         if not message:
             raise ValueError(
                 "message cannot be empty."
             )
 
-        # Store the response with a clear role prefix.
         return self.memory.add(
             f"Assistant: {message}"
         )
 
-    # Retrieve conversation memories relevant
-    # to the current query.
+    # ---------------------------------------------------------
+    # RECALL
+    # ---------------------------------------------------------
+
     def recall(
         self,
         query: str,
         limit: int = 5,
     ) -> list[dict]:
 
-        # Search the persistent memory database.
+        if not isinstance(query, str):
+            raise ValueError(
+                "query must be a string."
+            )
+
+        query = query.strip()
+
+        if not query:
+            return []
+
+        if limit <= 0:
+            raise ValueError(
+                "limit must be greater than 0."
+            )
+
         return self.memory.search(
             query=query,
             limit=limit,
         )
 
-    # Build conversation context for the LLM.
+    # ---------------------------------------------------------
+    # RECALL RECENT
+    # ---------------------------------------------------------
+
+    def recall_recent(
+        self,
+        limit: int = 5,
+    ) -> list[dict]:
+
+        if limit <= 0:
+            raise ValueError(
+                "limit must be greater than 0."
+            )
+
+        # Preferred path:
+        # The real Memory class provides list().
+        if hasattr(self.memory, "list"):
+
+            memories = self.memory.list()
+
+            if isinstance(memories, list):
+
+                # Memory.list() returns newest first.
+                return memories[:limit]
+
+        # Test doubles may expose their records directly.
+        if hasattr(self.memory, "memories"):
+
+            memories = self.memory.memories
+
+            if isinstance(memories, list):
+
+                # If records are stored oldest first,
+                # take the newest records.
+                return memories[-limit:]
+
+        return []
+
+    # ---------------------------------------------------------
+    # BUILD CONTEXT
+    # ---------------------------------------------------------
+
     def build_context(
         self,
         query: str,
         limit: int = 5,
     ) -> str:
 
-        # Retrieve relevant conversation memories.
-        memories = self.recall(
-            query=query,
+        if not isinstance(query, str):
+            raise ValueError(
+                "query must be a string."
+            )
+
+        query = query.strip()
+
+        if not query:
+            return ""
+
+        if limit <= 0:
+            raise ValueError(
+                "limit must be greater than 0."
+            )
+
+        # IMPORTANT:
+        #
+        # Conversation context should use recent
+        # conversation history instead of searching
+        # for words matching the current question.
+        #
+        # Example:
+        #
+        # User:
+        #     My name is Pirlo.
+        #
+        # Later:
+        #     What's my name?
+        #
+        # A normal text search for "What's my name?"
+        # will NOT reliably find "My name is Pirlo."
+        #
+        # Therefore we use recent conversation history.
+
+        memories = self.recall_recent(
             limit=limit,
         )
 
-        # Return empty context when nothing was found.
         if not memories:
             return ""
 
-        # Store formatted conversation messages.
-        sections = []
+        sections: list[str] = []
 
-        # Format each recalled memory.
         for memory in memories:
 
-            sections.append(
-                memory["content"]
+            if not isinstance(
+                memory,
+                dict,
+            ):
+                continue
+
+            content = memory.get(
+                "content",
+                "",
             )
 
-        # Join messages into one context block.
-        return "\n".join(sections)
+            if not isinstance(
+                content,
+                str,
+            ):
+                continue
+
+            content = content.strip()
+
+            if not content:
+                continue
+
+            sections.append(
+                content
+            )
+
+        if not sections:
+            return ""
+
+        # recall_recent() returns newest first.
+        #
+        # Reverse the records so the LLM sees the
+        # conversation in normal chronological order.
+        sections.reverse()
+
+        return "\n".join(
+            sections
+        )

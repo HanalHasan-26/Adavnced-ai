@@ -1,16 +1,17 @@
+from __future__ import annotations
+
 from app.core.logger import logger
-from app.core.errors import handle_error
 
 
+def startup() -> None:
+    """
+    Start the application lifecycle.
+    """
 
+    logger.info("Application startup.")
 
-def start():
-
-    try:
-
-        logger.info("Core system initialized.")
-        print("Core system initialized.")
-
-    except Exception as error:
-
-        handle_error(error)
+    print()
+    print("==============================")
+    print("       Starting Advanced AI")
+    print("==============================")
+    print("Application state: STARTING")
