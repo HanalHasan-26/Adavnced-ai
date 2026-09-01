@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 # =========================================================
 # KNOWLEDGE
 # =========================================================
@@ -86,6 +87,7 @@ class KnowledgeAssistant:
         web_page_fetcher: WebPageFetcher | None = None,
         web_text_extractor: HTMLTextExtractor | None = None,
         web_content_security: WebContentSecurity | None = None,
+        debug_web: bool = False,
     ):
 
         # -----------------------------------------------------
@@ -158,6 +160,22 @@ class KnowledgeAssistant:
             web_content_security
             or WebContentSecurity()
         )
+
+        self.debug_web = debug_web
+
+        # IMPORTANT:
+        #
+        # Do not validate WEB mode during construction.
+        #
+        # The assistant must be constructible even when:
+        #
+        #     mode=WEB
+        #     web_search=None
+        #
+        # The error is raised when web access is actually
+        # requested.
+        #
+        # This preserves the integration-test contract.
 
     # =========================================================
     # QUERY HELPERS
@@ -267,7 +285,7 @@ class KnowledgeAssistant:
         )
 
     # =========================================================
-    # STORE WEB ANSWER
+    # STORE WEB ANSWER IN LONG-TERM MEMORY
     # =========================================================
 
     def _remember_web_answer(
@@ -275,12 +293,6 @@ class KnowledgeAssistant:
         query: str,
         answer: str,
     ) -> None:
-        """
-        Store a successful web-derived answer in long-term
-        assistant memory.
-
-        Memory failures must never break the answer.
-        """
 
         if not isinstance(query, str):
             return
@@ -311,6 +323,8 @@ class KnowledgeAssistant:
             ValueError,
         ):
 
+            # Memory failure must never break an otherwise
+            # successful web response.
             pass
 
     # =========================================================
@@ -400,7 +414,7 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # DECIDE WHETHER WEB SHOULD BE USED
+        # WEB DECISION
         # -----------------------------------------------------
 
         if not force:
@@ -420,22 +434,23 @@ class KnowledgeAssistant:
                 self.web_mode_controller.mode
             )
 
-            # WEB mode explicitly requires web.
+            # WEB mode requires a backend when web access
+            # is actually attempted.
             if mode == WebMode.WEB:
 
                 raise ValueError(
                     "web_search cannot be None."
                 )
 
-            # Explicit web: request requires web.
+            # Explicit web: also requires a backend.
             if force:
 
                 raise ValueError(
                     "web_search cannot be None."
                 )
 
-            # AUTO mode gracefully falls back
-            # to local knowledge/memory.
+            # AUTO mode gracefully falls back to local
+            # processing.
             return []
 
         # -----------------------------------------------------
@@ -505,9 +520,13 @@ class KnowledgeAssistant:
 
         research_sections: list[str] = []
 
-        for result in results:
+        for index, result in enumerate(
+            results,
+            start=1,
+        ):
 
             section_parts = [
+                f"WEB SOURCE {index}",
                 f"Title: {result.title}",
                 f"URL: {result.url}",
                 f"Snippet: {result.snippet}",
@@ -526,7 +545,7 @@ class KnowledgeAssistant:
                 )
 
                 # ---------------------------------------------
-                # EXTRACT TEXT
+                # EXTRACT READABLE TEXT
                 # ---------------------------------------------
 
                 text = (
@@ -551,7 +570,8 @@ class KnowledgeAssistant:
                     if safe_text:
 
                         section_parts.append(
-                            safe_text
+                            "Page content:\n"
+                            + safe_text
                         )
 
             except (
@@ -559,8 +579,8 @@ class KnowledgeAssistant:
                 ValueError,
             ):
 
-                # Search metadata is still useful when
-                # webpage fetching fails.
+                # Search metadata remains useful even if the
+                # page itself cannot be fetched.
                 pass
 
             research_sections.append(
@@ -571,6 +591,69 @@ class KnowledgeAssistant:
 
         return "\n\n".join(
             research_sections
+        )
+
+    # =========================================================
+    # BUILD WEB KNOWLEDGE
+    # =========================================================
+
+    @staticmethod
+    def _build_web_knowledge(
+        web_context: str,
+    ) -> str:
+        """
+        Put web results into the Knowledge field as well as
+        the context field.
+
+        This is intentional.
+
+        PromptBuilder gives the Knowledge section a very
+        prominent position in the final prompt. Previously,
+        web data could exist in context while the local
+        knowledge section told the model that no relevant
+        knowledge was available.
+
+        For a small local model, that can cause it to ignore
+        the web evidence.
+
+        By putting the actual web results into the Knowledge
+        section, the model receives an unambiguous instruction:
+
+            the following is the information found for
+            the current web request.
+
+        The web results themselves remain in the context too.
+        """
+
+        if not isinstance(web_context, str):
+            return ""
+
+        web_context = web_context.strip()
+
+        if not web_context:
+            return ""
+
+        return (
+            "CURRENT WEB INFORMATION\n"
+            "=======================\n"
+            "\n"
+            "The following information was retrieved from "
+            "web search for the user's current request.\n"
+            "\n"
+            "Use this information as the primary factual "
+            "source for this request.\n"
+            "\n"
+            "Do not claim that the information is unavailable "
+            "when the answer is present in these web results.\n"
+            "\n"
+            "When the user asks for a current price, current "
+            "value, latest news, recent event, or other "
+            "time-sensitive information, use the newest "
+            "relevant web result available here.\n"
+            "\n"
+            "WEB SEARCH RESULTS\n"
+            "------------------\n"
+            f"{web_context}"
         )
 
     # =========================================================
@@ -599,7 +682,7 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # CLEAN QUERY
+        # REMOVE COMMAND PREFIX
         # -----------------------------------------------------
 
         clean_query = (
@@ -619,7 +702,7 @@ class KnowledgeAssistant:
         )
 
         # -----------------------------------------------------
-        # FALLBACK
+        # NO RESULTS
         # -----------------------------------------------------
 
         if not web_context:
@@ -629,21 +712,44 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # WEB-ONLY KNOWLEDGE
+        # WEB KNOWLEDGE
         # -----------------------------------------------------
 
         knowledge = (
-            "No local knowledge was used. "
-            "This request was explicitly sent "
-            "to the web."
+            self._build_web_knowledge(
+                web_context
+            )
         )
 
+        if not knowledge:
+
+            knowledge = (
+                "No web information was retrieved."
+            )
+
         # -----------------------------------------------------
-        # CONTEXT
+        # DIRECT WEB CONTEXT
         # -----------------------------------------------------
 
         context = (
-            "DIRECT WEB RESEARCH:\n"
+            "DIRECT WEB REQUEST\n"
+            "==================\n"
+            "\n"
+            "The user explicitly requested web access.\n"
+            "\n"
+            "Use the web results below to answer the user's "
+            "question.\n"
+            "\n"
+            "Do not substitute old conversation memory or "
+            "local knowledge for the current web results.\n"
+            "\n"
+            "If the web results contain a numerical value "
+            "that answers the question, report that value "
+            "rather than saying that real-time information "
+            "is unavailable.\n"
+            "\n"
+            "WEB RESEARCH\n"
+            "-------------\n"
             + web_context
         )
 
@@ -666,25 +772,6 @@ class KnowledgeAssistant:
         query: str,
         limit: int = 5,
     ) -> str:
-        """
-        Normal assistant flow.
-
-        OFFLINE:
-            Local knowledge + memory only.
-
-        AUTO:
-            Local knowledge + memory.
-            If there is no useful long-term memory,
-            WebAutoDecider may trigger web research.
-
-        WEB:
-            Web is mandatory and is always searched,
-            regardless of existing memory.
-
-        Explicit:
-            web: question
-            always bypasses this method entirely.
-        """
 
         if not isinstance(query, str):
             raise ValueError(
@@ -745,7 +832,7 @@ class KnowledgeAssistant:
         )
 
         # -----------------------------------------------------
-        # KNOWLEDGE
+        # DEFAULT KNOWLEDGE
         # -----------------------------------------------------
 
         if knowledge_context:
@@ -772,12 +859,11 @@ class KnowledgeAssistant:
         # WEB MODE
         # -----------------------------------------------------
         #
-        # IMPORTANT:
+        # WEB mode ALWAYS searches.
         #
-        # WEB mode must ALWAYS perform a web search.
+        # Long-term memory must never suppress WEB mode.
         #
-        # Existing memory does NOT suppress the search.
-        #
+
         if mode == WebMode.WEB:
 
             web_context = self.web_research(
@@ -790,11 +876,17 @@ class KnowledgeAssistant:
         # AUTO MODE
         # -----------------------------------------------------
         #
-        # In AUTO mode, useful long-term memory can prevent
-        # another web search.
+        # AUTO mode:
         #
-        # If there is no memory, ask WebAutoDecider.
+        #     memory available
+        #         ↓
+        #     don't search unnecessarily
         #
+        #     no memory
+        #         ↓
+        #     ask WebAutoDecider
+        #
+
         elif mode == WebMode.AUTO:
 
             if not memory_context:
@@ -816,12 +908,63 @@ class KnowledgeAssistant:
         # -----------------------------------------------------
         # OFFLINE MODE
         # -----------------------------------------------------
-        #
-        # Nothing to do. Web remains disabled.
-        #
+
         elif mode == WebMode.OFFLINE:
 
             web_context = ""
+
+        # -----------------------------------------------------
+        # UNKNOWN MODE
+        # -----------------------------------------------------
+
+        else:
+
+            should_search_web = (
+                self._should_use_web(
+                    query
+                )
+            )
+
+            if should_search_web:
+
+                web_context = self.web_research(
+                    query=query,
+                    limit=limit,
+                    force=False,
+                )
+
+        # -----------------------------------------------------
+        # WEB KNOWLEDGE PRIORITY
+        # -----------------------------------------------------
+        #
+        # If web results exist, include them in the Knowledge
+        # section as well.
+        #
+        # This prevents a local "No relevant knowledge" message
+        # from overshadowing fresh web information.
+        #
+
+        if web_context:
+
+            web_knowledge = (
+                self._build_web_knowledge(
+                    web_context
+                )
+            )
+
+            if web_knowledge:
+
+                if knowledge_context:
+
+                    knowledge = (
+                        knowledge
+                        + "\n\n"
+                        + web_knowledge
+                    )
+
+                else:
+
+                    knowledge = web_knowledge
 
         # -----------------------------------------------------
         # BUILD CONTEXT
@@ -947,6 +1090,58 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
+        # OPTIONAL WEB DEBUG
+        # -----------------------------------------------------
+
+        if self.debug_web:
+
+            print(
+                "\n"
+                + "=" * 72
+            )
+
+            print(
+                "WEB DEBUG"
+            )
+
+            print(
+                "=" * 72
+            )
+
+            print(
+                f"Original query: {query}"
+            )
+
+            print(
+                f"Clean query: {clean_query}"
+            )
+
+            print(
+                f"Direct web: {direct_web}"
+            )
+
+            print(
+                f"Web mode: "
+                f"{self.web_mode_controller.mode}"
+            )
+
+            print(
+                "\nLLM PROMPT:"
+            )
+
+            print(
+                "-" * 72
+            )
+
+            print(
+                prompt
+            )
+
+            print(
+                "-" * 72
+            )
+
+        # -----------------------------------------------------
         # GENERATE ANSWER
         # -----------------------------------------------------
 
@@ -969,14 +1164,26 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # DETERMINE WHETHER WEB WAS ACTUALLY USED
+        # DETERMINE WHETHER WEB WAS USED
         # -----------------------------------------------------
 
         web_answer = direct_web
 
         if not web_answer:
 
-            if "Web research results:" in prompt:
+            # WEB mode always uses web.
+            if (
+                self.web_mode_controller.mode
+                == WebMode.WEB
+            ):
+
+                web_answer = True
+
+            # AUTO mode only counts as web-derived if actual
+            # web research was placed into the prompt.
+            elif (
+                "Web research results:" in prompt
+            ):
 
                 web_answer = True
 
@@ -992,14 +1199,14 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # LEARN USER FACTS
+        # LEARN EXPLICIT USER FACTS
         # -----------------------------------------------------
         #
-        # Only the user's original message is passed.
+        # Only the original user message is passed.
         #
-        # The assistant's answer is NEVER passed to
-        # UserFacts.
+        # The AI answer is never passed to UserFacts.
         #
+
         self.user_facts.learn_from_user_message(
             query
         )
