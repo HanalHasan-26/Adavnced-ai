@@ -171,6 +171,65 @@ class KnowledgeAssistant:
         )
 
     # =========================================================
+    # QUERY HELPERS
+    # =========================================================
+
+    @staticmethod
+    def _is_direct_web_query(
+        query: str,
+    ) -> bool:
+        """
+        Detect the explicit direct-web command.
+
+        Examples:
+
+            web: current gold price
+            web: latest news about gold
+            web: who is the current president of India?
+
+        The prefix is intentionally simple so the user has
+        an explicit and predictable way to bypass local
+        knowledge and memory retrieval.
+        """
+
+        if not isinstance(query, str):
+            raise ValueError(
+                "query must be a string."
+            )
+
+        return query.strip().lower().startswith(
+            "web:"
+        )
+
+    @staticmethod
+    def _remove_direct_web_prefix(
+        query: str,
+    ) -> str:
+        """
+        Remove the explicit 'web:' command before sending
+        the actual question to the search engine and LLM.
+        """
+
+        if not isinstance(query, str):
+            raise ValueError(
+                "query must be a string."
+            )
+
+        query = query.strip()
+
+        if not query.lower().startswith("web:"):
+            return query
+
+        cleaned_query = query[4:].strip()
+
+        if not cleaned_query:
+            raise ValueError(
+                "web query cannot be empty."
+            )
+
+        return cleaned_query
+
+    # =========================================================
     # LOCAL KNOWLEDGE
     # =========================================================
 
@@ -265,17 +324,17 @@ class KnowledgeAssistant:
         query: str,
     ) -> bool:
         """
-        Decide whether the current query should use web access.
+        Decide whether the query should use web access.
 
         OFFLINE:
-            Never use the web.
+            Never use web.
 
         WEB:
-            Always use the web.
+            Always use web.
 
         AUTO:
-            Let WebAutoDecider determine whether the query
-            requires current or external information.
+            Let WebAutoDecider determine whether web access
+            is required.
         """
 
         mode = (
@@ -287,7 +346,6 @@ class KnowledgeAssistant:
         # -----------------------------------------------------
 
         if mode == WebMode.OFFLINE:
-
             return False
 
         # -----------------------------------------------------
@@ -295,7 +353,6 @@ class KnowledgeAssistant:
         # -----------------------------------------------------
 
         if mode == WebMode.WEB:
-
             return True
 
         # -----------------------------------------------------
@@ -308,10 +365,6 @@ class KnowledgeAssistant:
                 query
             )
 
-        # -----------------------------------------------------
-        # UNKNOWN MODE
-        # -----------------------------------------------------
-
         return False
 
     # =========================================================
@@ -322,7 +375,20 @@ class KnowledgeAssistant:
         self,
         query: str,
         limit: int = 5,
+        force: bool = False,
     ) -> list[SearchResult]:
+        """
+        Search the web.
+
+        force=True is used by the explicit:
+
+            web: ...
+
+        command.
+
+        This allows direct web queries to bypass the
+        automatic web-decision system.
+        """
 
         if not isinstance(query, str):
             raise ValueError(
@@ -340,17 +406,18 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # CHECK WEB DECISION
+        # WEB DECISION
         # -----------------------------------------------------
 
-        if not self._should_use_web(
-            query
-        ):
+        if not force:
 
-            return []
+            if not self._should_use_web(
+                query
+            ):
+                return []
 
         # -----------------------------------------------------
-        # WEB SEARCH CLIENT
+        # WEB CLIENT
         # -----------------------------------------------------
 
         if self.web_search is None:
@@ -369,7 +436,7 @@ class KnowledgeAssistant:
         )
 
         # -----------------------------------------------------
-        # VALIDATE
+        # VALIDATION
         # -----------------------------------------------------
 
         return (
@@ -386,7 +453,14 @@ class KnowledgeAssistant:
         self,
         query: str,
         limit: int = 5,
+        force: bool = False,
     ) -> str:
+        """
+        Perform web search and retrieve readable webpage
+        content.
+
+        force=True allows explicit direct-web requests.
+        """
 
         if not isinstance(query, str):
             raise ValueError(
@@ -404,40 +478,20 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # CHECK WEB DECISION
-        # -----------------------------------------------------
-
-        if not self._should_use_web(
-            query
-        ):
-
-            return ""
-
-        # -----------------------------------------------------
-        # WEB SEARCH CLIENT
-        # -----------------------------------------------------
-
-        if self.web_search is None:
-
-            raise ValueError(
-                "web_search cannot be None."
-            )
-
-        # -----------------------------------------------------
         # SEARCH
         # -----------------------------------------------------
 
         results = self.web_retrieve(
             query=query,
             limit=limit,
+            force=force,
         )
 
         if not results:
-
             return ""
 
         # -----------------------------------------------------
-        # RESEARCH RESULTS
+        # BUILD RESEARCH CONTEXT
         # -----------------------------------------------------
 
         research_sections: list[str] = []
@@ -451,7 +505,7 @@ class KnowledgeAssistant:
             ]
 
             # -------------------------------------------------
-            # FETCH WEBPAGE
+            # FETCH PAGE
             # -------------------------------------------------
 
             try:
@@ -496,8 +550,8 @@ class KnowledgeAssistant:
                 ValueError,
             ):
 
-                # Keep search metadata even if
-                # webpage fetching fails.
+                # Keep search metadata if webpage fetching
+                # fails.
                 pass
 
             research_sections.append(
@@ -511,7 +565,109 @@ class KnowledgeAssistant:
         )
 
     # =========================================================
-    # PREPARE PROMPT
+    # DIRECT WEB PROMPT
+    # =========================================================
+
+    def prepare_direct_web(
+        self,
+        query: str,
+        limit: int = 5,
+    ) -> str:
+        """
+        Build a prompt exclusively from web research.
+
+        IMPORTANT:
+
+        This method intentionally DOES NOT run:
+
+            - local knowledge retrieval
+            - conversation-memory retrieval
+            - long-term assistant-memory retrieval
+            - user-fact retrieval
+
+        This is what makes:
+
+            web: ...
+
+        a genuinely direct web path.
+        """
+
+        if not isinstance(query, str):
+            raise ValueError(
+                "query must be a string."
+            )
+
+        if not query.strip():
+            raise ValueError(
+                "query cannot be empty."
+            )
+
+        if limit <= 0:
+            raise ValueError(
+                "limit must be greater than 0."
+            )
+
+        # -----------------------------------------------------
+        # REMOVE COMMAND PREFIX
+        # -----------------------------------------------------
+
+        clean_query = (
+            self._remove_direct_web_prefix(
+                query
+            )
+        )
+
+        # -----------------------------------------------------
+        # WEB RESEARCH
+        # -----------------------------------------------------
+
+        web_context = self.web_research(
+            query=clean_query,
+            limit=limit,
+            force=True,
+        )
+
+        # -----------------------------------------------------
+        # FALLBACK
+        # -----------------------------------------------------
+
+        if not web_context:
+
+            web_context = (
+                "No web search results were available."
+            )
+
+        # -----------------------------------------------------
+        # WEB-ONLY KNOWLEDGE
+        # -----------------------------------------------------
+
+        knowledge = (
+            "No local knowledge was used. "
+            "This request was explicitly sent "
+            "to the web."
+        )
+
+        # -----------------------------------------------------
+        # CONTEXT
+        # -----------------------------------------------------
+
+        context = (
+            "DIRECT WEB RESEARCH:\n"
+            + web_context
+        )
+
+        # -----------------------------------------------------
+        # BUILD PROMPT
+        # -----------------------------------------------------
+
+        return self.prompt_builder.build(
+            query=clean_query,
+            context=context,
+            knowledge=knowledge,
+        )
+
+    # =========================================================
+    # NORMAL PROMPT
     # =========================================================
 
     def prepare(
@@ -519,6 +675,23 @@ class KnowledgeAssistant:
         query: str,
         limit: int = 5,
     ) -> str:
+        """
+        Build the normal AI prompt.
+
+        Normal flow:
+
+            local knowledge
+                ↓
+            conversation
+                ↓
+            user facts
+                ↓
+            long-term memory
+                ↓
+            web if AUTO decides it is necessary
+                ↓
+            LLM
+        """
 
         if not isinstance(query, str):
             raise ValueError(
@@ -568,7 +741,7 @@ class KnowledgeAssistant:
         )
 
         # -----------------------------------------------------
-        # LONG-TERM ASSISTANT MEMORY
+        # LONG-TERM MEMORY
         # -----------------------------------------------------
 
         memory_context = (
@@ -580,32 +753,21 @@ class KnowledgeAssistant:
 
         # -----------------------------------------------------
         # WEB RESEARCH
-        #
-        # IMPORTANT:
-        #
-        # web_research() now checks the WebMode.
-        #
-        # In AUTO mode, only queries identified as requiring
-        # current/external information will access the web.
-        #
-        # Therefore normal local questions will NOT perform
-        # unnecessary web searches.
         # -----------------------------------------------------
 
         web_context = self.web_research(
             query=query,
             limit=limit,
+            force=False,
         )
 
         # -----------------------------------------------------
-        # BUILD KNOWLEDGE SECTION
+        # KNOWLEDGE
         # -----------------------------------------------------
 
         if knowledge_context:
 
-            knowledge = (
-                knowledge_context
-            )
+            knowledge = knowledge_context
 
         else:
 
@@ -614,14 +776,10 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # BUILD FINAL CONTEXT
+        # BUILD CONTEXT
         # -----------------------------------------------------
 
         context_parts: list[str] = []
-
-        # -----------------------------------------------------
-        # PREVIOUS CONVERSATION
-        # -----------------------------------------------------
 
         if conversation_context:
 
@@ -630,19 +788,11 @@ class KnowledgeAssistant:
                 + conversation_context
             )
 
-        # -----------------------------------------------------
-        # USER FACTS
-        # -----------------------------------------------------
-
         if user_fact_context:
 
             context_parts.append(
                 user_fact_context
             )
-
-        # -----------------------------------------------------
-        # LONG-TERM MEMORY
-        # -----------------------------------------------------
 
         if memory_context:
 
@@ -651,20 +801,12 @@ class KnowledgeAssistant:
                 + memory_context
             )
 
-        # -----------------------------------------------------
-        # WEB RESEARCH
-        # -----------------------------------------------------
-
         if web_context:
 
             context_parts.append(
                 "Web research results:\n"
                 + web_context
             )
-
-        # -----------------------------------------------------
-        # COMBINE CONTEXT
-        # -----------------------------------------------------
 
         combined_context = (
             "\n\n".join(
@@ -673,7 +815,7 @@ class KnowledgeAssistant:
         )
 
         # -----------------------------------------------------
-        # BUILD FINAL PROMPT
+        # BUILD PROMPT
         # -----------------------------------------------------
 
         return self.prompt_builder.build(
@@ -713,13 +855,32 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
+        # DETERMINE ROUTE
+        # -----------------------------------------------------
+
+        direct_web = (
+            self._is_direct_web_query(
+                query
+            )
+        )
+
+        # -----------------------------------------------------
         # BUILD PROMPT
         # -----------------------------------------------------
 
-        prompt = self.prepare(
-            query=query,
-            limit=limit,
-        )
+        if direct_web:
+
+            prompt = self.prepare_direct_web(
+                query=query,
+                limit=limit,
+            )
+
+        else:
+
+            prompt = self.prepare(
+                query=query,
+                limit=limit,
+            )
 
         # -----------------------------------------------------
         # GENERATE ANSWER
@@ -746,16 +907,13 @@ class KnowledgeAssistant:
         # -----------------------------------------------------
         # LEARN EXPLICIT USER FACTS
         # -----------------------------------------------------
-        #
-        # IMPORTANT:
-        #
+
         # Only the user's message is passed to UserFacts.
         #
-        # The AI's answer is NEVER passed to UserFacts.
+        # The AI answer is NEVER passed to UserFacts.
         #
         # Therefore the AI cannot accidentally invent
         # or overwrite a personal fact.
-        # -----------------------------------------------------
 
         self.user_facts.learn_from_user_message(
             query
