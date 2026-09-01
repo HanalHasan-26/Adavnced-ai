@@ -1,13 +1,6 @@
 from __future__ import annotations
 
 # =========================================================
-# STANDARD LIBRARY
-# =========================================================
-
-import re
-
-
-# =========================================================
 # KNOWLEDGE
 # =========================================================
 
@@ -113,19 +106,16 @@ class KnowledgeAssistant:
 
         self.llm = llm
 
-        # Short-term conversation memory.
         self.conversation_memory = (
             conversation_memory
             or ConversationMemory()
         )
 
-        # Long-term assistant memory.
         self.assistant_memory = (
             assistant_memory
             or AssistantMemory()
         )
 
-        # Structured persistent user facts.
         self.user_facts = (
             user_facts
             or UserFacts()
@@ -142,7 +132,6 @@ class KnowledgeAssistant:
             )
         )
 
-        # Automatic web-use decision system.
         self.web_auto_decider = (
             web_auto_decider
             or WebAutoDecider()
@@ -178,19 +167,6 @@ class KnowledgeAssistant:
     def _is_direct_web_query(
         query: str,
     ) -> bool:
-        """
-        Detect the explicit direct-web command.
-
-        Examples:
-
-            web: current gold price
-            web: latest news about gold
-            web: who is the current president of India?
-
-        The prefix is intentionally simple so the user has
-        an explicit and predictable way to bypass local
-        knowledge and memory retrieval.
-        """
 
         if not isinstance(query, str):
             raise ValueError(
@@ -205,10 +181,6 @@ class KnowledgeAssistant:
     def _remove_direct_web_prefix(
         query: str,
     ) -> str:
-        """
-        Remove the explicit 'web:' command before sending
-        the actual question to the search engine and LLM.
-        """
 
         if not isinstance(query, str):
             raise ValueError(
@@ -295,6 +267,53 @@ class KnowledgeAssistant:
         )
 
     # =========================================================
+    # STORE WEB ANSWER
+    # =========================================================
+
+    def _remember_web_answer(
+        self,
+        query: str,
+        answer: str,
+    ) -> None:
+        """
+        Store a successful web-derived answer in long-term
+        assistant memory.
+
+        Memory failures must never break the answer.
+        """
+
+        if not isinstance(query, str):
+            return
+
+        if not isinstance(answer, str):
+            return
+
+        query = query.strip()
+        answer = answer.strip()
+
+        if not query or not answer:
+            return
+
+        memory_content = (
+            "[WEB ANSWER]\n"
+            f"Question: {query}\n"
+            f"Answer: {answer}"
+        )
+
+        try:
+
+            self.assistant_memory.remember(
+                memory_content
+            )
+
+        except (
+            RuntimeError,
+            ValueError,
+        ):
+
+            pass
+
+    # =========================================================
     # AUTHORITATIVE USER FACTS
     # =========================================================
 
@@ -323,19 +342,6 @@ class KnowledgeAssistant:
         self,
         query: str,
     ) -> bool:
-        """
-        Decide whether the query should use web access.
-
-        OFFLINE:
-            Never use web.
-
-        WEB:
-            Always use web.
-
-        AUTO:
-            Let WebAutoDecider determine whether web access
-            is required.
-        """
 
         mode = (
             self.web_mode_controller.mode
@@ -377,18 +383,6 @@ class KnowledgeAssistant:
         limit: int = 5,
         force: bool = False,
     ) -> list[SearchResult]:
-        """
-        Search the web.
-
-        force=True is used by the explicit:
-
-            web: ...
-
-        command.
-
-        This allows direct web queries to bypass the
-        automatic web-decision system.
-        """
 
         if not isinstance(query, str):
             raise ValueError(
@@ -406,7 +400,7 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # WEB DECISION
+        # DECIDE WHETHER WEB SHOULD BE USED
         # -----------------------------------------------------
 
         if not force:
@@ -422,9 +416,27 @@ class KnowledgeAssistant:
 
         if self.web_search is None:
 
-            raise ValueError(
-                "web_search cannot be None."
+            mode = (
+                self.web_mode_controller.mode
             )
+
+            # WEB mode explicitly requires web.
+            if mode == WebMode.WEB:
+
+                raise ValueError(
+                    "web_search cannot be None."
+                )
+
+            # Explicit web: request requires web.
+            if force:
+
+                raise ValueError(
+                    "web_search cannot be None."
+                )
+
+            # AUTO mode gracefully falls back
+            # to local knowledge/memory.
+            return []
 
         # -----------------------------------------------------
         # SEARCH
@@ -434,6 +446,9 @@ class KnowledgeAssistant:
             query=query,
             limit=limit,
         )
+
+        if results is None:
+            return []
 
         # -----------------------------------------------------
         # VALIDATION
@@ -455,12 +470,6 @@ class KnowledgeAssistant:
         limit: int = 5,
         force: bool = False,
     ) -> str:
-        """
-        Perform web search and retrieve readable webpage
-        content.
-
-        force=True allows explicit direct-web requests.
-        """
 
         if not isinstance(query, str):
             raise ValueError(
@@ -517,7 +526,7 @@ class KnowledgeAssistant:
                 )
 
                 # ---------------------------------------------
-                # EXTRACT READABLE TEXT
+                # EXTRACT TEXT
                 # ---------------------------------------------
 
                 text = (
@@ -550,8 +559,8 @@ class KnowledgeAssistant:
                 ValueError,
             ):
 
-                # Keep search metadata if webpage fetching
-                # fails.
+                # Search metadata is still useful when
+                # webpage fetching fails.
                 pass
 
             research_sections.append(
@@ -573,24 +582,6 @@ class KnowledgeAssistant:
         query: str,
         limit: int = 5,
     ) -> str:
-        """
-        Build a prompt exclusively from web research.
-
-        IMPORTANT:
-
-        This method intentionally DOES NOT run:
-
-            - local knowledge retrieval
-            - conversation-memory retrieval
-            - long-term assistant-memory retrieval
-            - user-fact retrieval
-
-        This is what makes:
-
-            web: ...
-
-        a genuinely direct web path.
-        """
 
         if not isinstance(query, str):
             raise ValueError(
@@ -608,7 +599,7 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # REMOVE COMMAND PREFIX
+        # CLEAN QUERY
         # -----------------------------------------------------
 
         clean_query = (
@@ -676,21 +667,23 @@ class KnowledgeAssistant:
         limit: int = 5,
     ) -> str:
         """
-        Build the normal AI prompt.
+        Normal assistant flow.
 
-        Normal flow:
+        OFFLINE:
+            Local knowledge + memory only.
 
-            local knowledge
-                ↓
-            conversation
-                ↓
-            user facts
-                ↓
-            long-term memory
-                ↓
-            web if AUTO decides it is necessary
-                ↓
-            LLM
+        AUTO:
+            Local knowledge + memory.
+            If there is no useful long-term memory,
+            WebAutoDecider may trigger web research.
+
+        WEB:
+            Web is mandatory and is always searched,
+            regardless of existing memory.
+
+        Explicit:
+            web: question
+            always bypasses this method entirely.
         """
 
         if not isinstance(query, str):
@@ -752,16 +745,6 @@ class KnowledgeAssistant:
         )
 
         # -----------------------------------------------------
-        # WEB RESEARCH
-        # -----------------------------------------------------
-
-        web_context = self.web_research(
-            query=query,
-            limit=limit,
-            force=False,
-        )
-
-        # -----------------------------------------------------
         # KNOWLEDGE
         # -----------------------------------------------------
 
@@ -774,6 +757,71 @@ class KnowledgeAssistant:
             knowledge = (
                 "No relevant knowledge was retrieved."
             )
+
+        # -----------------------------------------------------
+        # WEB RESEARCH
+        # -----------------------------------------------------
+
+        web_context = ""
+
+        mode = (
+            self.web_mode_controller.mode
+        )
+
+        # -----------------------------------------------------
+        # WEB MODE
+        # -----------------------------------------------------
+        #
+        # IMPORTANT:
+        #
+        # WEB mode must ALWAYS perform a web search.
+        #
+        # Existing memory does NOT suppress the search.
+        #
+        if mode == WebMode.WEB:
+
+            web_context = self.web_research(
+                query=query,
+                limit=limit,
+                force=False,
+            )
+
+        # -----------------------------------------------------
+        # AUTO MODE
+        # -----------------------------------------------------
+        #
+        # In AUTO mode, useful long-term memory can prevent
+        # another web search.
+        #
+        # If there is no memory, ask WebAutoDecider.
+        #
+        elif mode == WebMode.AUTO:
+
+            if not memory_context:
+
+                should_search_web = (
+                    self._should_use_web(
+                        query
+                    )
+                )
+
+                if should_search_web:
+
+                    web_context = self.web_research(
+                        query=query,
+                        limit=limit,
+                        force=False,
+                    )
+
+        # -----------------------------------------------------
+        # OFFLINE MODE
+        # -----------------------------------------------------
+        #
+        # Nothing to do. Web remains disabled.
+        #
+        elif mode == WebMode.OFFLINE:
+
+            web_context = ""
 
         # -----------------------------------------------------
         # BUILD CONTEXT
@@ -865,6 +913,22 @@ class KnowledgeAssistant:
         )
 
         # -----------------------------------------------------
+        # NORMALIZE QUERY
+        # -----------------------------------------------------
+
+        if direct_web:
+
+            clean_query = (
+                self._remove_direct_web_prefix(
+                    query
+                )
+            )
+
+        else:
+
+            clean_query = query.strip()
+
+        # -----------------------------------------------------
         # BUILD PROMPT
         # -----------------------------------------------------
 
@@ -905,16 +969,37 @@ class KnowledgeAssistant:
             )
 
         # -----------------------------------------------------
-        # LEARN EXPLICIT USER FACTS
+        # DETERMINE WHETHER WEB WAS ACTUALLY USED
         # -----------------------------------------------------
 
-        # Only the user's message is passed to UserFacts.
-        #
-        # The AI answer is NEVER passed to UserFacts.
-        #
-        # Therefore the AI cannot accidentally invent
-        # or overwrite a personal fact.
+        web_answer = direct_web
 
+        if not web_answer:
+
+            if "Web research results:" in prompt:
+
+                web_answer = True
+
+        # -----------------------------------------------------
+        # STORE WEB ANSWER
+        # -----------------------------------------------------
+
+        if web_answer:
+
+            self._remember_web_answer(
+                query=clean_query,
+                answer=answer,
+            )
+
+        # -----------------------------------------------------
+        # LEARN USER FACTS
+        # -----------------------------------------------------
+        #
+        # Only the user's original message is passed.
+        #
+        # The assistant's answer is NEVER passed to
+        # UserFacts.
+        #
         self.user_facts.learn_from_user_message(
             query
         )
