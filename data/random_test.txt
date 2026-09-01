@@ -1,0 +1,25 @@
+RANDOM KNOWLEDGE TEST DOCUMENT
+
+Title: The Blue Harbor Lighthouse
+
+The Blue Harbor Lighthouse was built in 1897 on a small island called Bellstone Island.
+
+The lighthouse tower is 42 meters tall and has 186 stone steps leading to the observation room.
+
+Its original light used an oil-powered mechanism. In 1956, the lighthouse was converted to an electric lighting system.
+
+The lighthouse keeper's house was located 75 meters east of the main tower.
+
+In 1978, a small weather station was installed near the northern wall of the lighthouse.
+
+The lighthouse was automated in 1992, and no permanent lighthouse keeper has lived there since then.
+
+The observation room contains an old brass telescope manufactured in France.
+
+SPECIAL TEST FACT:
+
+The lighthouse's emergency radio identification number is 6384.
+
+This number is used only for testing the knowledge retrieval system.
+
+END OF DOCUMENT.

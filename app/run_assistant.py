@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+import time
+import threading
+
 from config.settings import (
     APP_NAME,
     MODEL_NAME,
@@ -21,41 +25,289 @@ from app.llm.ollama import OllamaBackend
 
 
 # =========================================================
+# LOADING UI
+# =========================================================
+
+def show_loading(
+    step: int,
+    total_steps: int,
+    message: str,
+    elapsed: float,
+) -> None:
+    """
+    Display startup progress.
+    """
+
+    bar_width = 20
+
+    progress = step / total_steps
+
+    filled = int(
+        bar_width * progress
+    )
+
+    empty = bar_width - filled
+
+    bar = (
+        "/" * filled
+        + "." * empty
+    )
+
+    percentage = int(
+        progress * 100
+    )
+
+    print(
+        f"[{bar}] "
+        f"{percentage:3d}% "
+        f"{message:<32} "
+        f"{elapsed:.2f}s"
+    )
+
+
+# =========================================================
+# AI THINKING / GENERATION LOADING UI
+# =========================================================
+
+class ThinkingAnimation:
+    """
+    Displays a live animation while the AI is generating
+    a response.
+    """
+
+    def __init__(self) -> None:
+
+        self.running = False
+
+        self.thread: threading.Thread | None = None
+
+        self.frames = [
+            "/",
+            "-",
+            "\\",
+            "|",
+        ]
+
+    def _animate(self) -> None:
+
+        frame_index = 0
+
+        start_time = time.perf_counter()
+
+        while self.running:
+
+            elapsed = (
+                time.perf_counter()
+                - start_time
+            )
+
+            frame = self.frames[
+                frame_index % len(self.frames)
+            ]
+
+            message = (
+                f"\rAI is thinking... "
+                f"{frame} "
+                f"{elapsed:.1f}s"
+            )
+
+            sys.stdout.write(
+                message
+            )
+
+            sys.stdout.flush()
+
+            frame_index += 1
+
+            time.sleep(0.15)
+
+    def start(self) -> None:
+
+        if self.running:
+            return
+
+        self.running = True
+
+        self.thread = threading.Thread(
+            target=self._animate,
+            daemon=True,
+        )
+
+        self.thread.start()
+
+    def stop(self) -> None:
+
+        self.running = False
+
+        if self.thread is not None:
+
+            self.thread.join(
+                timeout=1.0
+            )
+
+        # Clear the current thinking line.
+        sys.stdout.write(
+            "\r"
+            + (" " * 60)
+            + "\r"
+        )
+
+        sys.stdout.flush()
+
+        self.thread = None
+
+
+# =========================================================
 # CREATE ASSISTANT
 # =========================================================
 
 def create_assistant() -> KnowledgeAssistant:
 
-    # Create persistent knowledge storage.
+    # -----------------------------------------------------
+    # STEP 1 - KNOWLEDGE STORAGE
+    # -----------------------------------------------------
+
+    step_start = time.perf_counter()
+
     storage = KnowledgeStorage()
 
-    # Create the knowledge retriever.
+    elapsed = (
+        time.perf_counter()
+        - step_start
+    )
+
+    show_loading(
+        step=1,
+        total_steps=5,
+        message="Loading knowledge storage...",
+        elapsed=elapsed,
+    )
+
+    # -----------------------------------------------------
+    # STEP 2 - RETRIEVAL SYSTEM
+    # -----------------------------------------------------
+
+    step_start = time.perf_counter()
+
     retriever = ChunkRetriever(
         storage=storage,
     )
 
-    # Create the retrieval pipeline.
+    elapsed = (
+        time.perf_counter()
+        - step_start
+    )
+
+    show_loading(
+        step=2,
+        total_steps=5,
+        message="Loading retrieval system...",
+        elapsed=elapsed,
+    )
+
+    # -----------------------------------------------------
+    # STEP 3 - KNOWLEDGE PIPELINE
+    # -----------------------------------------------------
+
+    step_start = time.perf_counter()
+
     pipeline = KnowledgeRetrievalPipeline(
         retriever=retriever,
     )
 
-    # Create the Ollama backend.
+    elapsed = (
+        time.perf_counter()
+        - step_start
+    )
+
+    show_loading(
+        step=3,
+        total_steps=5,
+        message="Loading knowledge pipeline...",
+        elapsed=elapsed,
+    )
+
+    # -----------------------------------------------------
+    # STEP 4 - LOCAL LLM
+    # -----------------------------------------------------
+
+    step_start = time.perf_counter()
+
     backend = OllamaBackend(
         model=MODEL_NAME,
     )
 
-    # Create the local LLM client.
     llm = LocalLLMClient(
         backend=backend,
     )
 
-    # Create the complete assistant.
+    elapsed = (
+        time.perf_counter()
+        - step_start
+    )
+
+    show_loading(
+        step=4,
+        total_steps=5,
+        message="Loading local LLM...",
+        elapsed=elapsed,
+    )
+
+    # -----------------------------------------------------
+    # STEP 5 - ASSISTANT
+    # -----------------------------------------------------
+
+    step_start = time.perf_counter()
+
     assistant = KnowledgeAssistant(
         retrieval_pipeline=pipeline,
         llm=llm,
     )
 
+    elapsed = (
+        time.perf_counter()
+        - step_start
+    )
+
+    show_loading(
+        step=5,
+        total_steps=5,
+        message="Initializing AI assistant...",
+        elapsed=elapsed,
+    )
+
     return assistant
+
+
+# =========================================================
+# ASK AI WITH THINKING ANIMATION
+# =========================================================
+
+def ask_ai(
+    assistant: KnowledgeAssistant,
+    query: str,
+) -> str:
+    """
+    Generate an AI response while displaying a live
+    thinking animation.
+    """
+
+    thinking = ThinkingAnimation()
+
+    try:
+
+        thinking.start()
+
+        answer = assistant.ask(
+            query=query,
+            limit=DEFAULT_RETRIEVAL_LIMIT,
+        )
+
+        return answer
+
+    finally:
+
+        thinking.stop()
 
 
 # =========================================================
@@ -66,6 +318,8 @@ def main() -> None:
 
     assistant: KnowledgeAssistant | None = None
 
+    total_start = time.perf_counter()
+
     try:
 
         # -------------------------------------------------
@@ -75,9 +329,19 @@ def main() -> None:
         startup()
 
         print()
-        print("==============================")
-        print(f"        {APP_NAME}")
-        print("==============================")
+
+        print(
+            "=============================="
+        )
+
+        print(
+            f"        {APP_NAME}"
+        )
+
+        print(
+            "=============================="
+        )
+
         print()
 
         logger.info(
@@ -88,31 +352,61 @@ def main() -> None:
             "Initializing AI assistant..."
         )
 
+        print()
+
+        # -------------------------------------------------
+        # CREATE ASSISTANT
+        # -------------------------------------------------
+
         assistant = create_assistant()
 
-        print(
-            "✓ Knowledge storage ready."
-        )
+        # -------------------------------------------------
+        # STARTUP COMPLETE
+        # -------------------------------------------------
 
-        print(
-            "✓ Retrieval system ready."
-        )
-
-        print(
-            "✓ Local LLM ready."
-        )
-
-        logger.info(
-            "AI assistant initialized successfully."
+        total_elapsed = (
+            time.perf_counter()
+            - total_start
         )
 
         print()
+
         print(
             "================================"
         )
+
+        print(
+            "       Initialization Complete"
+        )
+
+        print(
+            "================================"
+        )
+
+        print(
+            f"Total startup time: "
+            f"{total_elapsed:.2f}s"
+        )
+
+        print()
+
+        logger.info(
+            "AI assistant initialized successfully "
+            f"in {total_elapsed:.2f}s."
+        )
+
+        # -------------------------------------------------
+        # ASSISTANT UI
+        # -------------------------------------------------
+
+        print(
+            "================================"
+        )
+
         print(
             "       Local AI Assistant"
         )
+
         print(
             "================================"
         )
@@ -170,7 +464,10 @@ def main() -> None:
 
                 break
 
-            # Ignore empty input.
+            # -------------------------------------------------
+            # IGNORE EMPTY INPUT
+            # -------------------------------------------------
+
             if not query:
                 continue
 
@@ -180,19 +477,26 @@ def main() -> None:
 
             try:
 
-                answer = assistant.ask(
+                answer = ask_ai(
+                    assistant=assistant,
                     query=query,
-                    limit=DEFAULT_RETRIEVAL_LIMIT,
                 )
 
-                print()
-                print("AI:")
-                print(answer)
+                print(
+                    "AI:"
+                )
+
+                print(
+                    answer
+                )
+
                 print()
 
             except Exception as error:
 
-                handle_error(error)
+                handle_error(
+                    error
+                )
 
                 print()
 
@@ -225,7 +529,9 @@ def main() -> None:
             "Application failed."
         )
 
-        handle_error(error)
+        handle_error(
+            error
+        )
 
     # ---------------------------------------------------------
     # SHUTDOWN
@@ -249,7 +555,9 @@ def main() -> None:
 
         except Exception as error:
 
-            handle_error(error)
+            handle_error(
+                error
+            )
 
 
 # =========================================================

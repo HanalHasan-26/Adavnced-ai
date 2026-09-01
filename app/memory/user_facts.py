@@ -16,18 +16,52 @@ class UserFacts:
     """
     Persistent structured facts explicitly stated by the user.
 
-    User facts are trusted separately from normal conversation memory.
-
-    Important rules:
-
-    1. Only explicit user statements create facts.
-    2. Assistant responses never create user facts.
-    3. A newer explicit user statement replaces an older fact
-       with the same fact key.
-    4. User facts are authoritative over old conversation/assistant
-       responses.
-    5. Name is treated as a high-priority fact.
+    Important behavior:
+    - Stores facts separately from conversation memory.
+    - Corrects common spelling mistakes in fact keys.
+    - Prevents duplicate keys such as:
+        favorite_color
+        fevorite_colore
+    - New explicit statements replace older values.
+    - Only explicit user statements are stored.
     """
+
+    # ---------------------------------------------------------
+    # COMMON FACT-KEY CORRECTIONS
+    # ---------------------------------------------------------
+
+    KEY_ALIASES = {
+        "fevorite_color": "favorite_color",
+        "fevorite_colore": "favorite_color",
+        "favourite_color": "favorite_color",
+        "favourite_colour": "favorite_color",
+        "favorite_colour": "favorite_color",
+
+        "fevorite_food": "favorite_food",
+        "favourite_food": "favorite_food",
+
+        "fevorite_sport": "favorite_sport",
+        "favourite_sport": "favorite_sport",
+
+        "fevorite_team": "favorite_team",
+        "favourite_team": "favorite_team",
+
+        "fevorite_movie": "favorite_movie",
+        "favourite_movie": "favorite_movie",
+
+        "fevorite_game": "favorite_game",
+        "favourite_game": "favorite_game",
+
+        "fevorite_song": "favorite_song",
+        "favourite_song": "favorite_song",
+
+        "fevorite_animal": "favorite_animal",
+        "favourite_animal": "favorite_animal",
+    }
+
+    # ---------------------------------------------------------
+    # INITIALIZATION
+    # ---------------------------------------------------------
 
     def __init__(
         self,
@@ -42,9 +76,9 @@ class UserFacts:
 
         self._initialize_database()
 
-    # =========================================================
-    # DATABASE
-    # =========================================================
+    # ---------------------------------------------------------
+    # DATABASE CONNECTION
+    # ---------------------------------------------------------
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
@@ -55,7 +89,12 @@ class UserFacts:
 
         return connection
 
+    # ---------------------------------------------------------
+    # DATABASE INITIALIZATION
+    # ---------------------------------------------------------
+
     def _initialize_database(self) -> None:
+
         with self._connect() as connection:
 
             connection.execute(
@@ -72,9 +111,108 @@ class UserFacts:
 
             connection.commit()
 
-    # =========================================================
+    # ---------------------------------------------------------
+    # NORMALIZE FACT KEY
+    # ---------------------------------------------------------
+
+    @classmethod
+    def _normalize_fact_key(
+        cls,
+        fact_key: str,
+    ) -> str:
+
+        if not isinstance(fact_key, str):
+            raise ValueError(
+                "fact_key must be a string."
+            )
+
+        fact_key = fact_key.strip().lower()
+
+        if not fact_key:
+            raise ValueError(
+                "fact_key must be a non-empty string."
+            )
+
+        # Convert spaces and hyphens into underscores.
+        fact_key = re.sub(
+            r"[\s\-]+",
+            "_",
+            fact_key,
+        )
+
+        # Remove unusual characters.
+        fact_key = re.sub(
+            r"[^a-z0-9_]",
+            "",
+            fact_key,
+        )
+
+        # Remove duplicate underscores.
+        fact_key = re.sub(
+            r"_+",
+            "_",
+            fact_key,
+        )
+
+        fact_key = fact_key.strip("_")
+
+        if not fact_key:
+            raise ValueError(
+                "fact_key must contain valid characters."
+            )
+
+        # Correct known misspellings / aliases.
+        fact_key = cls.KEY_ALIASES.get(
+            fact_key,
+            fact_key,
+        )
+
+        return fact_key
+
+    # ---------------------------------------------------------
+    # CLEAN FACT VALUE
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def _clean_value(
+        value: str,
+    ) -> str:
+
+        if not isinstance(value, str):
+            raise ValueError(
+                "fact_value must be a string."
+            )
+
+        value = value.strip()
+
+        # Normalize repeated whitespace.
+        value = re.sub(
+            r"\s+",
+            " ",
+            value,
+        )
+
+        # Remove common trailing conversational phrases.
+        value = re.sub(
+            r"\s*,?\s*"
+            r"(?:(?:u|you)\s+got(?:\s+it)?|"
+            r"(?:remember(?:\s+that)?|right|okay|ok))"
+            r"\s*[.!?]*$",
+            "",
+            value,
+            flags=re.IGNORECASE,
+        )
+
+        # Remove surrounding punctuation.
+        value = value.strip(
+            " \t\r\n.,!?;:"
+        )
+
+        return value
+
+    # ---------------------------------------------------------
     # SET FACT
-    # =========================================================
+    # ---------------------------------------------------------
 
     def set_fact(
         self,
@@ -82,30 +220,24 @@ class UserFacts:
         fact_value: str,
     ) -> str:
 
-        if (
-            not isinstance(fact_key, str)
-            or not fact_key.strip()
-        ):
-            raise ValueError(
-                "fact_key must be a non-empty string."
-            )
+        fact_key = self._normalize_fact_key(
+            fact_key
+        )
 
-        if (
-            not isinstance(fact_value, str)
-            or not fact_value.strip()
-        ):
+        fact_value = self._clean_value(
+            fact_value
+        )
+
+        if not fact_value:
             raise ValueError(
                 "fact_value must be a non-empty string."
             )
-
-        fact_key = fact_key.strip().lower()
-        fact_value = fact_value.strip()
 
         now = datetime.now().isoformat()
 
         with self._connect() as connection:
 
-            existing = connection.execute(
+            row = connection.execute(
                 """
                 SELECT id
                 FROM user_facts
@@ -114,7 +246,11 @@ class UserFacts:
                 (fact_key,),
             ).fetchone()
 
-            if existing is None:
+            # -------------------------------------------------
+            # CREATE NEW FACT
+            # -------------------------------------------------
+
+            if row is None:
 
                 fact_id = str(uuid4())
 
@@ -138,9 +274,13 @@ class UserFacts:
                     ),
                 )
 
+            # -------------------------------------------------
+            # UPDATE EXISTING FACT
+            # -------------------------------------------------
+
             else:
 
-                fact_id = existing["id"]
+                fact_id = row["id"]
 
                 connection.execute(
                     """
@@ -161,25 +301,17 @@ class UserFacts:
 
         return fact_id
 
-    # =========================================================
+    # ---------------------------------------------------------
     # GET FACT
-    # =========================================================
+    # ---------------------------------------------------------
 
     def get_fact(
         self,
         fact_key: str,
     ) -> dict | None:
 
-        if (
-            not isinstance(fact_key, str)
-            or not fact_key.strip()
-        ):
-            raise ValueError(
-                "fact_key must be a non-empty string."
-            )
-
-        normalized_key = (
-            fact_key.strip().lower()
+        fact_key = self._normalize_fact_key(
+            fact_key
         )
 
         with self._connect() as connection:
@@ -195,7 +327,7 @@ class UserFacts:
                 FROM user_facts
                 WHERE fact_key = ?
                 """,
-                (normalized_key,),
+                (fact_key,),
             ).fetchone()
 
         if row is None:
@@ -203,9 +335,9 @@ class UserFacts:
 
         return dict(row)
 
-    # =========================================================
+    # ---------------------------------------------------------
     # LIST FACTS
-    # =========================================================
+    # ---------------------------------------------------------
 
     def list_facts(self) -> list[dict]:
 
@@ -229,25 +361,17 @@ class UserFacts:
             for row in rows
         ]
 
-    # =========================================================
+    # ---------------------------------------------------------
     # DELETE FACT
-    # =========================================================
+    # ---------------------------------------------------------
 
     def delete_fact(
         self,
         fact_key: str,
     ) -> bool:
 
-        if (
-            not isinstance(fact_key, str)
-            or not fact_key.strip()
-        ):
-            raise ValueError(
-                "fact_key must be a non-empty string."
-            )
-
-        normalized_key = (
-            fact_key.strip().lower()
+        fact_key = self._normalize_fact_key(
+            fact_key
         )
 
         with self._connect() as connection:
@@ -257,182 +381,34 @@ class UserFacts:
                 DELETE FROM user_facts
                 WHERE fact_key = ?
                 """,
-                (normalized_key,),
+                (fact_key,),
             )
 
             connection.commit()
 
             return cursor.rowcount > 0
 
-    # =========================================================
-    # VALUE CLEANING
-    # =========================================================
-
-    @staticmethod
-    def _clean_value(
-        value: str,
-    ) -> str:
-
-        value = value.strip()
-
-        # Normalize repeated whitespace.
-        value = re.sub(
-            r"\s+",
-            " ",
-            value,
-        )
-
-        # Remove common conversational endings.
-        value = re.sub(
-            r"""
-            \s*,?\s*
-            (?:
-                (?:u|you)\s+got(?:\s+it)?
-                |
-                remember(?:\s+that)?
-                |
-                right
-                |
-                okay
-                |
-                ok
-            )
-            \s*[.!?]*$
-            """,
-            "",
-            value,
-            flags=re.IGNORECASE | re.VERBOSE,
-        )
-
-        # Remove trailing punctuation.
-        value = value.strip(
-            " \t\r\n.,!?;:"
-        )
-
-        return value
-
-    # =========================================================
-    # NAME EXTRACTION
-    # =========================================================
-
-    def _extract_name(
-        self,
-        message: str,
-    ) -> str | None:
-
-        patterns = [
-            # My name is Hanal
-            r"""
-            ^\s*
-            (?:actually\s*[,;:]?\s*)?
-            my\s+
-            (?:actual\s+)?
-            name\s+is\s+
-            (?P<value>
-                [A-Za-z][A-Za-z'\-]*
-                (?:\s+[A-Za-z][A-Za-z'\-]*){0,3}
-            )
-            """,
-
-            # I am Hanal
-            # I'm Hanal
-            r"""
-            ^\s*
-            (?:actually\s*[,;:]?\s*)?
-            i\s*(?:am|'m)\s+
-            (?P<value>
-                [A-Za-z][A-Za-z'\-]*
-                (?:\s+[A-Za-z][A-Za-z'\-]*){0,3}
-            )
-            """,
-
-            # Call me Hanal
-            r"""
-            ^\s*
-            (?:actually\s*[,;:]?\s*)?
-            call\s+me\s+
-            (?P<value>
-                [A-Za-z][A-Za-z'\-]*
-                (?:\s+[A-Za-z][A-Za-z'\-]*){0,3}
-            )
-            """,
-
-            # I'm Hanal, remember that
-            # My name is Hanal, you got it?
-            r"""
-            ^\s*
-            (?:actually\s*[,;:]?\s*)?
-            (?:
-                my\s+(?:actual\s+)?name\s+is
-                |
-                i\s*(?:am|'m)
-                |
-                call\s+me
-            )
-            \s+
-            (?P<value>
-                [A-Za-z][A-Za-z'\-]*
-                (?:\s+[A-Za-z][A-Za-z'\-]*){0,3}
-            )
-            """,
-        ]
-
-        for pattern in patterns:
-
-            match = re.match(
-                pattern,
-                message,
-                flags=re.IGNORECASE | re.VERBOSE,
-            )
-
-            if not match:
-                continue
-
-            value = self._clean_value(
-                match.group("value")
-            )
-
-            if not value:
-                continue
-
-            if value.lower() in {
-                "not",
-                "unknown",
-                "nothing",
-                "nobody",
-            }:
-                continue
-
-            return value
-
-        return None
-
-    # =========================================================
-    # FACT EXTRACTION
-    # =========================================================
+    # ---------------------------------------------------------
+    # EXTRACT FACTS
+    # ---------------------------------------------------------
 
     def extract_facts(
         self,
         message: str,
     ) -> dict[str, str]:
         """
-        Extract only facts explicitly asserted about the user.
+        Extract facts explicitly asserted by the user.
 
-        Assistant messages must never be passed here.
+        Examples:
 
-        Example:
+        My name is Hanal
+        -> {"name": "Hanal"}
 
-            My name is Hanal.
-                ->
-            {"name": "Hanal"}
+        My favorite color is blue
+        -> {"favorite_color": "blue"}
 
-            My favorite color is blue.
-                ->
-            {"favorite_color": "blue"}
-
-            I like football.
-                ->
-            {"likes": "football"}
+        My fevorite colore is black
+        -> {"favorite_color": "black"}
         """
 
         if not isinstance(message, str):
@@ -447,166 +423,158 @@ class UserFacts:
 
         facts: dict[str, str] = {}
 
-        # -----------------------------------------------------
+        # =====================================================
         # NAME
-        # -----------------------------------------------------
+        # =====================================================
 
-        name = self._extract_name(
-            message
-        )
+        name_patterns = [
 
-        if name:
-            facts["name"] = name
+            r"^\s*"
+            r"(?:actually\s*[,;:]?\s*)?"
+            r"my\s+"
+            r"(?:actual\s+)?"
+            r"name\s+is\s+"
+            r"([A-Za-z][A-Za-z'\-]*"
+            r"(?:\s+[A-Za-z][A-Za-z'\-]*){0,3})",
 
-        # -----------------------------------------------------
-        # COMMON PERSONAL FACTS
-        # -----------------------------------------------------
+            r"^\s*"
+            r"(?:actually\s*[,;:]?\s*)?"
+            r"i\s*(?:am|'m)\s+"
+            r"([A-Za-z][A-Za-z'\-]*"
+            r"(?:\s+[A-Za-z][A-Za-z'\-]*){0,3})",
 
-        patterns = [
-            (
-                "favorite_color",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                my\s+favorite\s+color\s+is\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "favorite_food",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                my\s+favorite\s+food\s+is\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "favorite_sport",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                my\s+favorite\s+sport\s+is\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "favorite_team",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                my\s+favorite\s+
-                (?:sports?\s+)?
-                team\s+is\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "favorite_movie",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                my\s+favorite\s+movie\s+is\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "favorite_game",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                my\s+favorite\s+game\s+is\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "favorite_song",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                my\s+favorite\s+song\s+is\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "favorite_animal",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                my\s+favorite\s+animal\s+is\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "location",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                i\s+
-                (?:live\s+in|am\s+from)
-                \s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "job",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                i\s+work\s+as\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "job",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                my\s+job\s+is\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "likes",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                i\s+like\s+
-                (.+?)
-                \s*$
-                """,
-            ),
-            (
-                "dislikes",
-                r"""
-                ^\s*
-                (?:actually\s*[,;:]?\s*)?
-                i\s+
-                (?:do\s+not|don't|dont)
-                \s+like\s+
-                (.+?)
-                \s*$
-                """,
-            ),
+            r"^\s*"
+            r"(?:actually\s*[,;:]?\s*)?"
+            r"call\s+me\s+"
+            r"([A-Za-z][A-Za-z'\-]*"
+            r"(?:\s+[A-Za-z][A-Za-z'\-]*){0,3})",
         ]
 
-        for fact_key, pattern in patterns:
+        for pattern in name_patterns:
+
+            match = re.match(
+                pattern
+                + r"(?=\s*(?:[,!?.]|$|"
+                r"(?:\s+(?:u|you)\s+got\b)|"
+                r"(?:\s+(?:remember(?:\s+that)?|"
+                r"right|okay|ok)\b)|"
+                r"(?:\s+not\b)))",
+                message,
+                re.IGNORECASE,
+            )
+
+            if match:
+
+                value = self._clean_value(
+                    match.group(1)
+                )
+
+                if (
+                    value
+                    and value.lower()
+                    not in {
+                        "not",
+                        "unknown",
+                    }
+                ):
+                    facts["name"] = value
+
+                break
+
+        # =====================================================
+        # STANDARD FACTS
+        # =====================================================
+
+        patterns = {
+
+            "favorite_color":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"my\s+"
+                r"favou?rite\s+"
+                r"colou?r\s+is\s+(.+)$",
+
+            "favorite_food":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"my\s+"
+                r"favou?rite\s+"
+                r"food\s+is\s+(.+)$",
+
+            "favorite_sport":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"my\s+"
+                r"favou?rite\s+"
+                r"sport\s+is\s+(.+)$",
+
+            "favorite_team":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"my\s+"
+                r"favou?rite\s+"
+                r"(?:sports?\s+)?"
+                r"team\s+is\s+(.+)$",
+
+            "favorite_movie":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"my\s+"
+                r"favou?rite\s+"
+                r"movie\s+is\s+(.+)$",
+
+            "favorite_game":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"my\s+"
+                r"favou?rite\s+"
+                r"game\s+is\s+(.+)$",
+
+            "favorite_song":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"my\s+"
+                r"favou?rite\s+"
+                r"song\s+is\s+(.+)$",
+
+            "favorite_animal":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"my\s+"
+                r"favou?rite\s+"
+                r"animal\s+is\s+(.+)$",
+
+            "location":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"i\s+"
+                r"(?:live\s+in|am\s+from)\s+(.+)$",
+
+            "job":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"i\s+"
+                r"work\s+as\s+(.+)$",
+
+            "likes":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"i\s+like\s+(.+)$",
+
+            "dislikes":
+                r"^\s*"
+                r"(?:actually\s*[,;:]?\s*)?"
+                r"i\s+"
+                r"(?:do\s+not|don't|dont)\s+"
+                r"like\s+(.+)$",
+        }
+
+        for fact_key, pattern in patterns.items():
 
             match = re.match(
                 pattern,
                 message,
-                flags=re.IGNORECASE | re.VERBOSE,
+                re.IGNORECASE,
             )
 
             if not match:
@@ -617,62 +585,75 @@ class UserFacts:
             )
 
             if value:
-                facts[fact_key] = value
+
+                normalized_key = (
+                    self._normalize_fact_key(
+                        fact_key
+                    )
+                )
+
+                facts[
+                    normalized_key
+                ] = value
 
             break
 
-        # -----------------------------------------------------
+        # =====================================================
         # GENERIC "MY X IS Y"
-        # -----------------------------------------------------
+        # =====================================================
 
         generic = re.match(
-            r"""
-            ^\s*
-            (?:actually\s*[,;:]?\s*)?
-            my\s+
-            (?P<key>
-                [A-Za-z][A-Za-z0-9_ ]{1,40}?
-            )
-            \s+is\s+
-            (?P<value>.+?)
-            \s*$
-            """,
+            r"^\s*"
+            r"(?:actually\s*[,;:]?\s*)?"
+            r"my\s+"
+            r"([A-Za-z][A-Za-z0-9_ ]{1,40}?)"
+            r"\s+is\s+"
+            r"(.+)$",
             message,
-            flags=re.IGNORECASE | re.VERBOSE,
+            re.IGNORECASE,
         )
 
         if generic:
 
             raw_key = self._clean_value(
-                generic.group("key")
-            ).lower()
+                generic.group(1)
+            )
 
             value = self._clean_value(
-                generic.group("value")
+                generic.group(2)
             )
 
             raw_key = re.sub(
                 r"\s+",
                 "_",
-                raw_key,
+                raw_key.lower(),
             )
 
-            # Name has its own authoritative extractor.
-            if raw_key not in {
-                "name",
-                "actual_name",
-            } and value:
+            if (
+                raw_key
+                not in {
+                    "name",
+                    "actual_name",
+                }
+                and value
+            ):
+
+                normalized_key = (
+                    self._normalize_fact_key(
+                        raw_key
+                    )
+                )
 
                 facts.setdefault(
-                    raw_key,
+                    normalized_key,
                     value,
                 )
 
         return facts
 
-    # =========================================================
-    # LEARN
-    # =========================================================
+    # ---------------------------------------------------------
+    # LEARN FROM USER MESSAGE
+    # ---------------------------------------------------------
 
     def learn_from_user_message(
         self,
@@ -692,9 +673,106 @@ class UserFacts:
 
         return facts
 
-    # =========================================================
+    # ---------------------------------------------------------
+    # CLEAN OLD DUPLICATE / MISSPELLED FACTS
+    # ---------------------------------------------------------
+
+    def repair_fact_keys(self) -> int:
+        """
+        Repairs old incorrectly stored keys.
+
+        Example:
+
+        fevorite_colore: black
+        favorite_color: blue
+
+        The canonical key becomes:
+
+        favorite_color: black
+
+        The newer/incorrect duplicate is removed.
+        """
+
+        facts = self.list_facts()
+
+        repaired = 0
+
+        for fact in facts:
+
+            old_key = fact["fact_key"]
+
+            new_key = self._normalize_fact_key(
+                old_key
+            )
+
+            if old_key == new_key:
+                continue
+
+            # -------------------------------------------------
+            # Check whether canonical key already exists.
+            # -------------------------------------------------
+
+            existing = self.get_fact(
+                new_key
+            )
+
+            if existing is None:
+
+                with self._connect() as connection:
+
+                    connection.execute(
+                        """
+                        UPDATE user_facts
+                        SET fact_key = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            new_key,
+                            fact["id"],
+                        ),
+                    )
+
+                    connection.commit()
+
+            else:
+
+                # The incorrectly named fact is newer,
+                # so preserve its value.
+                old_updated = datetime.fromisoformat(
+                    fact["updated_at"]
+                )
+
+                existing_updated = datetime.fromisoformat(
+                    existing["updated_at"]
+                )
+
+                if old_updated > existing_updated:
+
+                    self.set_fact(
+                        new_key,
+                        fact["fact_value"],
+                    )
+
+                # Delete duplicate old key.
+                with self._connect() as connection:
+
+                    connection.execute(
+                        """
+                        DELETE FROM user_facts
+                        WHERE id = ?
+                        """,
+                        (fact["id"],),
+                    )
+
+                    connection.commit()
+
+            repaired += 1
+
+        return repaired
+
+    # ---------------------------------------------------------
     # BUILD CONTEXT
-    # =========================================================
+    # ---------------------------------------------------------
 
     def build_context(
         self,
@@ -712,56 +790,30 @@ class UserFacts:
                 "limit must be greater than 0."
             )
 
+        # Repair old misspelled keys before building context.
+        self.repair_fact_keys()
+
         facts = self.list_facts()
 
         if not facts:
             return ""
 
-        # -----------------------------------------------------
-        # PRIORITY
-        # -----------------------------------------------------
-        #
-        # Name should always be included first.
-        #
-
-        name_facts = [
-            fact
-            for fact in facts
-            if fact["fact_key"] == "name"
-        ]
-
-        other_facts = [
-            fact
-            for fact in facts
-            if fact["fact_key"] != "name"
-        ]
-
-        ordered_facts = (
-            name_facts + other_facts
-        )
-
-        ordered_facts = ordered_facts[
-            :limit
-        ]
-
-        # -----------------------------------------------------
-        # CONTEXT
-        # -----------------------------------------------------
+        # Prevent unlimited prompt growth.
+        facts = facts[:limit]
 
         lines = [
             "AUTHORITATIVE USER FACTS:",
             (
-                "These facts were explicitly stated "
-                "by the user."
+                "These facts were explicitly stated by the user."
             ),
             (
-                "They are more authoritative than "
-                "older assistant responses or conflicting "
+                "They are more authoritative than older "
+                "assistant responses or conflicting "
                 "conversation text."
             ),
         ]
 
-        for fact in ordered_facts:
+        for fact in facts:
 
             lines.append(
                 f"- {fact['fact_key']}: "

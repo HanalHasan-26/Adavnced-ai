@@ -1,18 +1,21 @@
-# Import Path so we can safely work with file paths.
+from __future__ import annotations
+
 from pathlib import Path
 
 
-# Create a class responsible for loading text files.
 class TextLoader:
+    """Load plain-text knowledge files."""
 
-    # Load text from a file.
     def load(self, file_path: Path) -> str:
+        """Read and return the complete contents of a text file."""
 
-        # Make sure the supplied path points to a file.
+        file_path = Path(file_path)
+
         if not file_path.is_file():
+            raise FileNotFoundError(
+                f"File not found: {file_path}"
+            )
 
-            # Stop with a clear error when the file doesn't exist.
-            raise FileNotFoundError(f"File not found: {file_path}")
-
-        # Read the complete file using UTF-8 encoding.
-        return file_path.read_text(encoding="utf-8")
+        return file_path.read_text(
+            encoding="utf-8"
+        )

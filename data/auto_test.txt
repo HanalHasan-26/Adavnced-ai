@@ -1,0 +1,6 @@
+AUTOMATIC INGESTION TEST
+
+The secret test number is 92741.
+
+This document exists to verify that the AI automatically discovers
+new files placed inside the data directory.

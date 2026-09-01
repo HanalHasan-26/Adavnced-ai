@@ -1,0 +1,31 @@
+SPACE KNOWLEDGE TEST DOCUMENT
+
+Title: The Aurora Research Station
+
+The Aurora Research Station is a fictional scientific facility located on Northstar Island.
+
+The station was established in 1984 by a team of 17 researchers.
+
+Its main laboratory is located 12 meters underground to protect sensitive instruments from extreme weather.
+
+The station contains three observation towers.
+
+The tallest observation tower is 31 meters high.
+
+In 1998, researchers installed a specialized telescope called Aurora-7.
+
+Aurora-7 was designed primarily to observe distant variable stars.
+
+The station's communication antenna is 46 meters tall.
+
+In 2006, the station received a new solar-power system containing 240 solar panels.
+
+The station can store enough energy to operate independently for approximately 18 days.
+
+SPECIAL TEST FACT:
+
+The original research team gave the station the internal identification code AR-5816.
+
+The code is used for testing the knowledge retrieval system.
+
+END OF DOCUMENT.
