@@ -434,7 +434,7 @@ def create_assistant() -> KnowledgeAssistant:
     assistant = KnowledgeAssistant(
         retrieval_pipeline=pipeline,
         llm=llm,
-
+        debug_web=True,
         # -------------------------------------------------
         # WEB
         # -------------------------------------------------

@@ -1,80 +1,65 @@
 from __future__ import annotations
 
-# Import URL parsing utilities.
 from urllib.parse import urlparse
-
-# Import the existing search result model.
 from app.web.search import SearchResult
 
 
 class WebResultValidator:
+    NON_NEWS_TERMS = (
+        "calculator",
+        "currency converter",
+        "exchange rate",
+        "gold calculator",
+        "price calculator",
+        "live price of gold",
+        "gold prices worldwide",
+    )
 
-    # Validate and clean one web-search result.
     def validate(
         self,
         result: SearchResult,
+        query: str | None = None,
     ) -> SearchResult | None:
-
-        # Make sure the object is a SearchResult.
-        if not isinstance(
-            result,
-            SearchResult,
-        ):
+        if not isinstance(result, SearchResult):
             return None
 
-        # Clean the fields.
         title = result.title.strip()
         url = result.url.strip()
         snippet = result.snippet.strip()
 
-        # A title is required.
-        if not title:
+        if not title or not url:
             return None
 
-        # A URL is required.
-        if not url:
-            return None
-
-        # Parse the URL.
         parsed = urlparse(url)
-
-        # Only accept HTTP and HTTPS URLs.
-        if parsed.scheme not in {
-            "http",
-            "https",
-        }:
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             return None
 
-        # A network location is required.
-        if not parsed.netloc:
-            return None
+        if query and self._is_news_query(query):
+            combined = f"{title} {url} {snippet}".lower()
+            if any(term in combined for term in self.NON_NEWS_TERMS):
+                return None
 
-        # Return a cleaned result.
-        return SearchResult(
-            title=title,
-            url=url,
-            snippet=snippet,
+        return SearchResult(title=title, url=url, snippet=snippet)
+
+    @staticmethod
+    def _is_news_query(query: str) -> bool:
+        q = query.lower()
+        return any(
+            x in q
+            for x in (
+                "news", "latest", "today", "breaking",
+                "recent", "headline", "headlines", "updates",
+            )
         )
 
-    # Validate multiple search results.
     def validate_many(
         self,
         results: list[SearchResult],
+        query: str | None = None,
     ) -> list[SearchResult]:
-
-        # Store valid results.
         validated = []
-
-        # Validate every result.
         for result in results:
-
-            cleaned = self.validate(
-                result
-            )
-
+            cleaned = self.validate(result, query=query)
             if cleaned is not None:
-                validated.append(
-                    cleaned
-                )
-
+                validated.append(cleaned)
         return validated
