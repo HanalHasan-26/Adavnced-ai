@@ -46,6 +46,10 @@ from app.web.mode import (
     WebModeController,
 )
 
+from app.web.auto import (
+    WebAutoDecider,
+)
+
 from app.web.search import (
     SearchResult,
     WebSearch,
@@ -83,6 +87,7 @@ class KnowledgeAssistant:
         assistant_memory: AssistantMemory | None = None,
         user_facts: UserFacts | None = None,
         web_mode_controller: WebModeController | None = None,
+        web_auto_decider: WebAutoDecider | None = None,
         web_search: WebSearch | None = None,
         web_result_validator: WebResultValidator | None = None,
         web_page_fetcher: WebPageFetcher | None = None,
@@ -132,7 +137,15 @@ class KnowledgeAssistant:
 
         self.web_mode_controller = (
             web_mode_controller
-            or WebModeController()
+            or WebModeController(
+                mode=WebMode.AUTO
+            )
+        )
+
+        # Automatic web-use decision system.
+        self.web_auto_decider = (
+            web_auto_decider
+            or WebAutoDecider()
         )
 
         self.web_search = web_search
@@ -231,6 +244,7 @@ class KnowledgeAssistant:
     ) -> str:
 
         try:
+
             return self.user_facts.build_context(
                 limit=50
             )
@@ -239,7 +253,66 @@ class KnowledgeAssistant:
             RuntimeError,
             ValueError,
         ):
+
             return ""
+
+    # =========================================================
+    # WEB MODE DECISION
+    # =========================================================
+
+    def _should_use_web(
+        self,
+        query: str,
+    ) -> bool:
+        """
+        Decide whether the current query should use web access.
+
+        OFFLINE:
+            Never use the web.
+
+        WEB:
+            Always use the web.
+
+        AUTO:
+            Let WebAutoDecider determine whether the query
+            requires current or external information.
+        """
+
+        mode = (
+            self.web_mode_controller.mode
+        )
+
+        # -----------------------------------------------------
+        # OFFLINE
+        # -----------------------------------------------------
+
+        if mode == WebMode.OFFLINE:
+
+            return False
+
+        # -----------------------------------------------------
+        # WEB
+        # -----------------------------------------------------
+
+        if mode == WebMode.WEB:
+
+            return True
+
+        # -----------------------------------------------------
+        # AUTO
+        # -----------------------------------------------------
+
+        if mode == WebMode.AUTO:
+
+            return self.web_auto_decider.should_use_web(
+                query
+            )
+
+        # -----------------------------------------------------
+        # UNKNOWN MODE
+        # -----------------------------------------------------
+
+        return False
 
     # =========================================================
     # WEB SEARCH
@@ -266,22 +339,38 @@ class KnowledgeAssistant:
                 "limit must be greater than 0."
             )
 
-        # Offline mode must NEVER access the internet.
-        if (
-            self.web_mode_controller.mode
-            == WebMode.OFFLINE
+        # -----------------------------------------------------
+        # CHECK WEB DECISION
+        # -----------------------------------------------------
+
+        if not self._should_use_web(
+            query
         ):
+
             return []
 
+        # -----------------------------------------------------
+        # WEB SEARCH CLIENT
+        # -----------------------------------------------------
+
         if self.web_search is None:
+
             raise ValueError(
                 "web_search cannot be None."
             )
+
+        # -----------------------------------------------------
+        # SEARCH
+        # -----------------------------------------------------
 
         results = self.web_search.search(
             query=query,
             limit=limit,
         )
+
+        # -----------------------------------------------------
+        # VALIDATE
+        # -----------------------------------------------------
 
         return (
             self.web_result_validator.validate_many(
@@ -314,16 +403,29 @@ class KnowledgeAssistant:
                 "limit must be greater than 0."
             )
 
-        if (
-            self.web_mode_controller.mode
-            == WebMode.OFFLINE
+        # -----------------------------------------------------
+        # CHECK WEB DECISION
+        # -----------------------------------------------------
+
+        if not self._should_use_web(
+            query
         ):
+
             return ""
 
+        # -----------------------------------------------------
+        # WEB SEARCH CLIENT
+        # -----------------------------------------------------
+
         if self.web_search is None:
+
             raise ValueError(
                 "web_search cannot be None."
             )
+
+        # -----------------------------------------------------
+        # SEARCH
+        # -----------------------------------------------------
 
         results = self.web_retrieve(
             query=query,
@@ -331,7 +433,12 @@ class KnowledgeAssistant:
         )
 
         if not results:
+
             return ""
+
+        # -----------------------------------------------------
+        # RESEARCH RESULTS
+        # -----------------------------------------------------
 
         research_sections: list[str] = []
 
@@ -343,6 +450,10 @@ class KnowledgeAssistant:
                 f"Snippet: {result.snippet}",
             ]
 
+            # -------------------------------------------------
+            # FETCH WEBPAGE
+            # -------------------------------------------------
+
             try:
 
                 html = (
@@ -351,11 +462,19 @@ class KnowledgeAssistant:
                     )
                 )
 
+                # ---------------------------------------------
+                # EXTRACT READABLE TEXT
+                # ---------------------------------------------
+
                 text = (
                     self.web_text_extractor.extract(
                         html
                     )
                 )
+
+                # ---------------------------------------------
+                # SECURITY PROCESSING
+                # ---------------------------------------------
 
                 if text:
 
@@ -366,9 +485,11 @@ class KnowledgeAssistant:
                         )
                     )
 
-                    section_parts.append(
-                        safe_text
-                    )
+                    if safe_text:
+
+                        section_parts.append(
+                            safe_text
+                        )
 
             except (
                 RuntimeError,
@@ -459,6 +580,16 @@ class KnowledgeAssistant:
 
         # -----------------------------------------------------
         # WEB RESEARCH
+        #
+        # IMPORTANT:
+        #
+        # web_research() now checks the WebMode.
+        #
+        # In AUTO mode, only queries identified as requiring
+        # current/external information will access the web.
+        #
+        # Therefore normal local questions will NOT perform
+        # unnecessary web searches.
         # -----------------------------------------------------
 
         web_context = self.web_research(
@@ -472,7 +603,9 @@ class KnowledgeAssistant:
 
         if knowledge_context:
 
-            knowledge = knowledge_context
+            knowledge = (
+                knowledge_context
+            )
 
         else:
 
@@ -486,6 +619,10 @@ class KnowledgeAssistant:
 
         context_parts: list[str] = []
 
+        # -----------------------------------------------------
+        # PREVIOUS CONVERSATION
+        # -----------------------------------------------------
+
         if conversation_context:
 
             context_parts.append(
@@ -493,11 +630,19 @@ class KnowledgeAssistant:
                 + conversation_context
             )
 
+        # -----------------------------------------------------
+        # USER FACTS
+        # -----------------------------------------------------
+
         if user_fact_context:
 
             context_parts.append(
                 user_fact_context
             )
+
+        # -----------------------------------------------------
+        # LONG-TERM MEMORY
+        # -----------------------------------------------------
 
         if memory_context:
 
@@ -506,12 +651,20 @@ class KnowledgeAssistant:
                 + memory_context
             )
 
+        # -----------------------------------------------------
+        # WEB RESEARCH
+        # -----------------------------------------------------
+
         if web_context:
 
             context_parts.append(
                 "Web research results:\n"
                 + web_context
             )
+
+        # -----------------------------------------------------
+        # COMBINE CONTEXT
+        # -----------------------------------------------------
 
         combined_context = (
             "\n\n".join(
@@ -520,7 +673,7 @@ class KnowledgeAssistant:
         )
 
         # -----------------------------------------------------
-        # BUILD PROMPT
+        # BUILD FINAL PROMPT
         # -----------------------------------------------------
 
         return self.prompt_builder.build(
@@ -577,6 +730,7 @@ class KnowledgeAssistant:
         )
 
         if not isinstance(answer, str):
+
             raise ValueError(
                 "llm returned a non-string response."
             )
@@ -584,6 +738,7 @@ class KnowledgeAssistant:
         answer = answer.strip()
 
         if not answer:
+
             raise ValueError(
                 "llm returned an empty response."
             )
@@ -591,7 +746,7 @@ class KnowledgeAssistant:
         # -----------------------------------------------------
         # LEARN EXPLICIT USER FACTS
         # -----------------------------------------------------
-
+        #
         # IMPORTANT:
         #
         # Only the user's message is passed to UserFacts.
@@ -600,6 +755,7 @@ class KnowledgeAssistant:
         #
         # Therefore the AI cannot accidentally invent
         # or overwrite a personal fact.
+        # -----------------------------------------------------
 
         self.user_facts.learn_from_user_message(
             query

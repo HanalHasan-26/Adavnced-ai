@@ -29,6 +29,39 @@ from app.knowledge.assistant import KnowledgeAssistant
 from app.llm.local import LocalLLMClient
 from app.llm.ollama import OllamaBackend
 
+# =========================================================
+# WEB
+# =========================================================
+
+from app.web.mode import (
+    WebMode,
+    WebModeController,
+)
+
+from app.web.auto import (
+    WebAutoDecider,
+)
+
+from app.web.search import (
+    WebSearch,
+)
+
+from app.web.validation import (
+    WebResultValidator,
+)
+
+from app.web.fetcher import (
+    WebPageFetcher,
+)
+
+from app.web.extractor import (
+    HTMLTextExtractor,
+)
+
+from app.web.security import (
+    WebContentSecurity,
+)
+
 
 # =========================================================
 # LOADING UI
@@ -363,6 +396,36 @@ def create_assistant() -> KnowledgeAssistant:
     )
 
     # -----------------------------------------------------
+    # WEB COMPONENTS
+    # -----------------------------------------------------
+
+    web_mode_controller = WebModeController(
+        mode=WebMode.AUTO,
+    )
+
+    web_auto_decider = WebAutoDecider()
+
+    web_search = WebSearch(
+        timeout=10.0,
+    )
+
+    web_result_validator = (
+        WebResultValidator()
+    )
+
+    web_page_fetcher = WebPageFetcher(
+        timeout=10.0,
+    )
+
+    web_text_extractor = (
+        HTMLTextExtractor()
+    )
+
+    web_content_security = (
+        WebContentSecurity()
+    )
+
+    # -----------------------------------------------------
     # STEP 6 - ASSISTANT
     # -----------------------------------------------------
 
@@ -371,6 +434,38 @@ def create_assistant() -> KnowledgeAssistant:
     assistant = KnowledgeAssistant(
         retrieval_pipeline=pipeline,
         llm=llm,
+
+        # -------------------------------------------------
+        # WEB
+        # -------------------------------------------------
+
+        web_mode_controller=(
+            web_mode_controller
+        ),
+
+        web_auto_decider=(
+            web_auto_decider
+        ),
+
+        web_search=(
+            web_search
+        ),
+
+        web_result_validator=(
+            web_result_validator
+        ),
+
+        web_page_fetcher=(
+            web_page_fetcher
+        ),
+
+        web_text_extractor=(
+            web_text_extractor
+        ),
+
+        web_content_security=(
+            web_content_security
+        ),
     )
 
     elapsed = (
@@ -522,6 +617,10 @@ def main() -> None:
 
         print(
             f"Model: {MODEL_NAME}"
+        )
+
+        print(
+            "Web mode: AUTO"
         )
 
         print(
