@@ -1,0 +1,8 @@
+CONFLICTING KNOWLEDGE TEST
+
+The Blue Harbor Lighthouse was built in 1901.
+
+This document intentionally contains information
+that conflicts with another knowledge document.
+
+END OF DOCUMENT.
