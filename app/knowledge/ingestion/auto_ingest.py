@@ -8,14 +8,18 @@ from app.knowledge.storage import KnowledgeStorage
 
 class KnowledgeAutoIngestion:
     """
-    Automatically discover and ingest knowledge files from the data directory.
+    Automatically synchronize TXT/PDF files in the data directory
+    with the persistent knowledge database.
 
     Supported:
         .txt
         .pdf
 
-    Existing unchanged files are skipped.
-    Modified files are re-ingested.
+    Behavior:
+        New file       -> ingest
+        Unchanged file -> skip
+        Modified file  -> update
+        Deleted file   -> remove from knowledge database
     """
 
     SUPPORTED_EXTENSIONS = {
@@ -36,15 +40,16 @@ class KnowledgeAutoIngestion:
 
     def scan_and_ingest(self) -> dict[str, int]:
         """
-        Scan the data directory and automatically ingest knowledge files.
+        Synchronize files in the data directory with the
+        knowledge database.
 
         Returns:
-            A dictionary containing:
-                discovered
-                ingested
-                updated
-                skipped
-                failed
+            discovered
+            ingested
+            updated
+            deleted
+            skipped
+            failed
         """
 
         self.data_directory.mkdir(
@@ -55,18 +60,26 @@ class KnowledgeAutoIngestion:
         discovered = 0
         ingested = 0
         updated = 0
+        deleted = 0
         skipped = 0
         failed = 0
 
         existing_documents = self.storage.list()
 
-        # Normalize existing database sources.
         existing_by_source = {
             self._normalize_path(document.source): document
             for document in existing_documents
         }
 
-        for file_path in sorted(self.data_directory.iterdir()):
+        current_files: set[str] = set()
+
+        # =========================================================
+        # SCAN CURRENT FILES
+        # =========================================================
+
+        for file_path in sorted(
+            self.data_directory.iterdir()
+        ):
 
             if not file_path.is_file():
                 continue
@@ -74,7 +87,7 @@ class KnowledgeAutoIngestion:
             if file_path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
                 continue
 
-            # Never treat the SQLite database as a knowledge document.
+            # Never treat the database itself as knowledge.
             if file_path.name == "knowledge.db":
                 continue
 
@@ -84,15 +97,19 @@ class KnowledgeAutoIngestion:
                 file_path
             )
 
+            current_files.add(
+                normalized_source
+            )
+
             existing_document = existing_by_source.get(
                 normalized_source
             )
 
             try:
 
-                # -------------------------------------------------
+                # =================================================
                 # NEW FILE
-                # -------------------------------------------------
+                # =================================================
 
                 if existing_document is None:
 
@@ -104,26 +121,26 @@ class KnowledgeAutoIngestion:
 
                     continue
 
-                # -------------------------------------------------
-                # EXISTING FILE
-                # -------------------------------------------------
+                # =================================================
+                # MODIFIED FILE
+                # =================================================
 
                 if self._is_modified(
                     file_path,
                     existing_document,
                 ):
 
-                    # Remove old chunks first.
+                    # Delete old chunks.
                     self.storage.delete_chunks(
                         str(existing_document.id)
                     )
 
-                    # Remove old document.
+                    # Delete old document.
                     self.storage.delete(
                         str(existing_document.id)
                     )
 
-                    # Ingest the updated document.
+                    # Ingest the new version.
                     self.ingestion_service.ingest(
                         file_path
                     )
@@ -132,9 +149,9 @@ class KnowledgeAutoIngestion:
 
                     continue
 
-                # -------------------------------------------------
+                # =================================================
                 # UNCHANGED FILE
-                # -------------------------------------------------
+                # =================================================
 
                 skipped += 1
 
@@ -143,14 +160,46 @@ class KnowledgeAutoIngestion:
                 failed += 1
 
                 print(
-                    f"⚠ Failed to ingest "
+                    f"⚠ Failed to synchronize "
                     f"{file_path.name}: {error}"
                 )
+
+        # =========================================================
+        # DETECT DELETED FILES
+        # =========================================================
+
+        for source, document in existing_by_source.items():
+
+            # If the source is no longer present on disk,
+            # remove its stored knowledge.
+            if source not in current_files:
+
+                try:
+
+                    self.storage.delete_chunks(
+                        str(document.id)
+                    )
+
+                    self.storage.delete(
+                        str(document.id)
+                    )
+
+                    deleted += 1
+
+                except Exception as error:
+
+                    failed += 1
+
+                    print(
+                        f"⚠ Failed to delete knowledge "
+                        f"for {document.source}: {error}"
+                    )
 
         return {
             "discovered": discovered,
             "ingested": ingested,
             "updated": updated,
+            "deleted": deleted,
             "skipped": skipped,
             "failed": failed,
         }
@@ -161,10 +210,8 @@ class KnowledgeAutoIngestion:
         existing_document,
     ) -> bool:
         """
-        Determine whether the physical file differs from the
-        stored document.
-
-        The comparison is based on the actual file content.
+        Determine whether the physical file content differs
+        from the content stored in the knowledge database.
         """
 
         try:
@@ -194,8 +241,8 @@ class KnowledgeAutoIngestion:
 
         except Exception:
 
-            # If we cannot compare safely, treat the file
-            # as modified so it can be re-ingested.
+            # If the file cannot be safely compared,
+            # treat it as modified.
             return True
 
     @staticmethod
@@ -203,11 +250,10 @@ class KnowledgeAutoIngestion:
         file_path: str | Path,
     ) -> str:
         """
-        Normalize paths so relative and absolute representations
-        can be compared consistently.
+        Normalize paths so relative and absolute paths
+        compare consistently.
         """
 
         return str(
-            Path(file_path)
-            .resolve()
+            Path(file_path).resolve()
         ).lower()

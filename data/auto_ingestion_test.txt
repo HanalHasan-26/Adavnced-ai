@@ -1,0 +1,5 @@
+AUTOMATIC UPDATE TEST
+
+The test code for this document is 22222.
+
+END OF DOCUMENT.

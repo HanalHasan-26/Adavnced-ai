@@ -8,6 +8,7 @@ from config.settings import (
     APP_NAME,
     MODEL_NAME,
     DEFAULT_RETRIEVAL_LIMIT,
+    DATA_DIR,
 )
 
 from app.core.startup import startup
@@ -16,6 +17,11 @@ from app.core.errors import handle_error
 from app.core.logger import logger
 
 from app.knowledge.storage import KnowledgeStorage
+from app.knowledge.ingestion.service import KnowledgeIngestionService
+from app.knowledge.ingestion.text_loader import TextLoader
+from app.knowledge.ingestion.pdf_loader import PDFLoader
+from app.knowledge.ingestion.auto_ingest import KnowledgeAutoIngestion
+
 from app.knowledge.retrieval.chunk_retriever import ChunkRetriever
 from app.knowledge.retrieval.pipeline import KnowledgeRetrievalPipeline
 from app.knowledge.assistant import KnowledgeAssistant
@@ -60,7 +66,7 @@ def show_loading(
     print(
         f"[{bar}] "
         f"{percentage:3d}% "
-        f"{message:<32} "
+        f"{message:<38} "
         f"{elapsed:.2f}s"
     )
 
@@ -145,10 +151,9 @@ class ThinkingAnimation:
                 timeout=1.0
             )
 
-        # Clear the current thinking line.
         sys.stdout.write(
             "\r"
-            + (" " * 60)
+            + (" " * 70)
             + "\r"
         )
 
@@ -158,10 +163,43 @@ class ThinkingAnimation:
 
 
 # =========================================================
+# KNOWLEDGE SYNCHRONIZATION
+# =========================================================
+
+def synchronize_knowledge(
+    storage: KnowledgeStorage,
+) -> dict[str, int]:
+    """
+    Scan the data directory and synchronize TXT/PDF files
+    with the persistent knowledge database.
+    """
+
+    text_loader = TextLoader()
+
+    pdf_loader = PDFLoader()
+
+    ingestion_service = KnowledgeIngestionService(
+        storage=storage,
+        text_loader=text_loader,
+        pdf_loader=pdf_loader,
+    )
+
+    auto_ingestion = KnowledgeAutoIngestion(
+        storage=storage,
+        ingestion_service=ingestion_service,
+        data_directory=DATA_DIR,
+    )
+
+    return auto_ingestion.scan_and_ingest()
+
+
+# =========================================================
 # CREATE ASSISTANT
 # =========================================================
 
 def create_assistant() -> KnowledgeAssistant:
+
+    total_steps = 6
 
     # -----------------------------------------------------
     # STEP 1 - KNOWLEDGE STORAGE
@@ -178,13 +216,84 @@ def create_assistant() -> KnowledgeAssistant:
 
     show_loading(
         step=1,
-        total_steps=5,
+        total_steps=total_steps,
         message="Loading knowledge storage...",
         elapsed=elapsed,
     )
 
     # -----------------------------------------------------
-    # STEP 2 - RETRIEVAL SYSTEM
+    # STEP 2 - KNOWLEDGE SYNCHRONIZATION
+    # -----------------------------------------------------
+
+    step_start = time.perf_counter()
+
+    knowledge_result = synchronize_knowledge(
+        storage=storage,
+    )
+
+    elapsed = (
+        time.perf_counter()
+        - step_start
+    )
+
+    show_loading(
+        step=2,
+        total_steps=total_steps,
+        message="Synchronizing knowledge files...",
+        elapsed=elapsed,
+    )
+
+    # -----------------------------------------------------
+    # DISPLAY KNOWLEDGE RESULT
+    # -----------------------------------------------------
+
+    print()
+
+    print(
+        "Knowledge synchronization:"
+    )
+
+    print(
+        f"  Files discovered : "
+        f"{knowledge_result['discovered']}"
+    )
+
+    print(
+        f"  New documents    : "
+        f"{knowledge_result['ingested']}"
+    )
+
+    print(
+        f"  Updated documents: "
+        f"{knowledge_result['updated']}"
+    )
+
+    print(
+        f"  Deleted documents: "
+        f"{knowledge_result['deleted']}"
+    )
+
+    print(
+        f"  Unchanged files  : "
+        f"{knowledge_result['skipped']}"
+    )
+
+    print(
+        f"  Failed           : "
+        f"{knowledge_result['failed']}"
+    )
+
+    print()
+
+    if knowledge_result["failed"] > 0:
+
+        logger.warning(
+            "Some knowledge files failed "
+            "during synchronization."
+        )
+
+    # -----------------------------------------------------
+    # STEP 3 - RETRIEVAL SYSTEM
     # -----------------------------------------------------
 
     step_start = time.perf_counter()
@@ -199,14 +308,14 @@ def create_assistant() -> KnowledgeAssistant:
     )
 
     show_loading(
-        step=2,
-        total_steps=5,
+        step=3,
+        total_steps=total_steps,
         message="Loading retrieval system...",
         elapsed=elapsed,
     )
 
     # -----------------------------------------------------
-    # STEP 3 - KNOWLEDGE PIPELINE
+    # STEP 4 - KNOWLEDGE PIPELINE
     # -----------------------------------------------------
 
     step_start = time.perf_counter()
@@ -221,14 +330,14 @@ def create_assistant() -> KnowledgeAssistant:
     )
 
     show_loading(
-        step=3,
-        total_steps=5,
+        step=4,
+        total_steps=total_steps,
         message="Loading knowledge pipeline...",
         elapsed=elapsed,
     )
 
     # -----------------------------------------------------
-    # STEP 4 - LOCAL LLM
+    # STEP 5 - LOCAL LLM
     # -----------------------------------------------------
 
     step_start = time.perf_counter()
@@ -247,14 +356,14 @@ def create_assistant() -> KnowledgeAssistant:
     )
 
     show_loading(
-        step=4,
-        total_steps=5,
+        step=5,
+        total_steps=total_steps,
         message="Loading local LLM...",
         elapsed=elapsed,
     )
 
     # -----------------------------------------------------
-    # STEP 5 - ASSISTANT
+    # STEP 6 - ASSISTANT
     # -----------------------------------------------------
 
     step_start = time.perf_counter()
@@ -270,8 +379,8 @@ def create_assistant() -> KnowledgeAssistant:
     )
 
     show_loading(
-        step=5,
-        total_steps=5,
+        step=6,
+        total_steps=total_steps,
         message="Initializing AI assistant...",
         elapsed=elapsed,
     )
