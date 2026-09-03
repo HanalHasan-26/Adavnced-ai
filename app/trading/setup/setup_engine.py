@@ -11,7 +11,6 @@ from app.trading.context.market_context import (
     MarketCondition,
     MarketContext,
 )
-from app.trading.data.market_bar import MarketBar
 
 
 class SetupDirection(str, Enum):
@@ -44,6 +43,23 @@ class SetupReason:
     reason_type: SetupReasonType
     message: str
 
+    def __post_init__(self) -> None:
+        if not isinstance(
+            self.reason_type,
+            SetupReasonType,
+        ):
+            raise ValueError(
+                "reason_type must be a SetupReasonType."
+            )
+
+        if (
+            not isinstance(self.message, str)
+            or not self.message.strip()
+        ):
+            raise ValueError(
+                "message must be a non-empty string."
+            )
+
 
 @dataclass(frozen=True, slots=True)
 class SetupEvaluation:
@@ -75,6 +91,7 @@ class SetupEngine:
     deterministic MarketContext data.
 
     This engine does not:
+
         - calculate entry prices
         - calculate stop loss
         - calculate take profit
@@ -227,18 +244,23 @@ class SetupEngine:
 
         Returns a deterministic setup assessment.
         """
+
         self._validate_context(context)
 
         supporting_signals = (
-            self._supporting_signals(context)
+            self._get_supporting_signals(context)
         )
 
-        conflicting_signals = (
+        conflicting_signals = tuple(
             context.conflicts
         )
 
         reasons: list[SetupReason] = []
         warnings: list[SetupReason] = []
+
+        # -----------------------------------------------------
+        # DATA SUFFICIENCY
+        # -----------------------------------------------------
 
         if not context.sufficient_history:
             warnings.append(
@@ -253,6 +275,10 @@ class SetupEngine:
                 )
             )
 
+        # -----------------------------------------------------
+        # NEUTRAL CONTEXT
+        # -----------------------------------------------------
+
         if context.bias == ContextBias.NEUTRAL:
             warnings.append(
                 SetupReason(
@@ -265,6 +291,10 @@ class SetupEngine:
                 )
             )
 
+        # -----------------------------------------------------
+        # CONFLICTS
+        # -----------------------------------------------------
+
         if conflicting_signals:
             warnings.append(
                 SetupReason(
@@ -275,14 +305,26 @@ class SetupEngine:
                 )
             )
 
+        # -----------------------------------------------------
+        # DIRECTION
+        # -----------------------------------------------------
+
         direction = self._determine_direction(
             context
         )
+
+        # -----------------------------------------------------
+        # SETUP TYPE
+        # -----------------------------------------------------
 
         setup_type = self._determine_setup_type(
             context,
             direction,
         )
+
+        # -----------------------------------------------------
+        # REASONS
+        # -----------------------------------------------------
 
         reasons.extend(
             self._build_reasons(
@@ -292,12 +334,20 @@ class SetupEngine:
             )
         )
 
+        # -----------------------------------------------------
+        # QUALITY SCORE
+        # -----------------------------------------------------
+
         quality_score = self._calculate_quality_score(
             context=context,
             direction=direction,
             supporting_signals=supporting_signals,
             conflicting_signals=conflicting_signals,
         )
+
+        # -----------------------------------------------------
+        # VALIDATION
+        # -----------------------------------------------------
 
         valid = self._is_valid_setup(
             context=context,
@@ -333,11 +383,11 @@ class SetupEngine:
                 context.context_strength
             ),
             market_condition=context.condition,
-            supporting_signals=(
-                tuple(supporting_signals)
+            supporting_signals=tuple(
+                supporting_signals
             ),
-            conflicting_signals=(
-                tuple(conflicting_signals)
+            conflicting_signals=tuple(
+                conflicting_signals
             ),
             reasons=tuple(reasons),
             warnings=tuple(warnings),
@@ -356,6 +406,7 @@ class SetupEngine:
         This helper is useful when the backtesting engine later
         evaluates historical setups one candle at a time.
         """
+
         if not isinstance(
             contexts,
             Sequence,
@@ -364,7 +415,10 @@ class SetupEngine:
                 "contexts must be a sequence of MarketContext objects."
             )
 
-        if isinstance(contexts, (str, bytes)):
+        if isinstance(
+            contexts,
+            (str, bytes),
+        ):
             raise ValueError(
                 "contexts must be a sequence of MarketContext objects."
             )
@@ -392,6 +446,8 @@ class SetupEngine:
                 "index is outside the available contexts."
             )
 
+        # Validate the complete supplied sequence so that
+        # evaluate_at() never silently accepts malformed data.
         for item_index, context in enumerate(contexts):
             if not isinstance(
                 context,
@@ -412,29 +468,63 @@ class SetupEngine:
     # =========================================================
 
     @staticmethod
-    def _supporting_signals(
+    def _get_supporting_signals(
         context: MarketContext,
-    ) -> list[ContextSignalType]:
+    ) -> tuple[ContextSignalType, ...]:
         """
         Return directional signals aligned with the context bias.
 
         Neutral signals are ignored.
+
+        STRUCTURE requires special handling because its bias can
+        originate from StructureTrend while the overall context
+        uses ContextBias. Both expose directional values such as
+        "BULLISH" and "BEARISH", but they are different enum types.
         """
+
         if context.bias == ContextBias.NEUTRAL:
-            return []
+            return ()
 
         supporting: list[ContextSignalType] = []
 
+        context_bias_value = getattr(
+            context.bias,
+            "value",
+            context.bias,
+        )
+
         for signal in context.signals:
+            if signal.strength <= 0.0:
+                continue
+
+            signal_bias_value = getattr(
+                signal.bias,
+                "value",
+                signal.bias,
+            )
+
+            # Structure can use StructureTrend instead of
+            # ContextBias, therefore compare normalized values.
             if (
-                signal.bias == context.bias
-                and signal.strength > 0.0
+                signal.signal_type
+                == ContextSignalType.STRUCTURE
             ):
+                if (
+                    signal_bias_value
+                    == context_bias_value
+                ):
+                    supporting.append(
+                        signal.signal_type
+                    )
+
+                continue
+
+            if signal.bias == context.bias:
                 supporting.append(
                     signal.signal_type
                 )
 
-        return supporting
+        return tuple(supporting)
 
     @staticmethod
     def _determine_direction(
@@ -456,9 +546,11 @@ class SetupEngine:
         if direction == SetupDirection.NONE:
             return SetupType.NONE
 
+        # Explicit ranging market.
         if context.condition == MarketCondition.RANGING:
             return SetupType.RANGE
 
+        # Aligned trending market.
         if (
             context.condition
             == MarketCondition.TRENDING_UP
@@ -473,21 +565,32 @@ class SetupEngine:
         ):
             return SetupType.TREND_CONTINUATION
 
+        # Transition is treated as a potential reversal.
         if context.condition == MarketCondition.TRANSITION:
             return SetupType.REVERSAL
 
+        # If the context direction disagrees with the
+        # underlying structure trend, classify as reversal.
+        trend_value = getattr(
+            context.trend,
+            "value",
+            context.trend,
+        )
+
         if (
-            context.trend.name == "BULLISH"
+            trend_value == "BULLISH"
             and direction == SetupDirection.SHORT
         ):
             return SetupType.REVERSAL
 
         if (
-            context.trend.name == "BEARISH"
+            trend_value == "BEARISH"
             and direction == SetupDirection.LONG
         ):
             return SetupType.REVERSAL
 
+        # A directional setup that is not a clean continuation
+        # is treated as a reversal-style setup.
         return SetupType.REVERSAL
 
     # =========================================================
@@ -502,6 +605,7 @@ class SetupEngine:
             ContextSignalType
         ],
     ) -> list[SetupReason]:
+
         reasons: list[SetupReason] = []
 
         if direction == SetupDirection.NONE:
@@ -510,6 +614,10 @@ class SetupEngine:
         signal_set = set(
             supporting_signals
         )
+
+        # -----------------------------------------------------
+        # STRUCTURE
+        # -----------------------------------------------------
 
         if ContextSignalType.STRUCTURE in signal_set:
             reasons.append(
@@ -523,6 +631,10 @@ class SetupEngine:
                     ),
                 )
             )
+
+        # -----------------------------------------------------
+        # MOMENTUM
+        # -----------------------------------------------------
 
         if (
             ContextSignalType.RSI in signal_set
@@ -540,6 +652,10 @@ class SetupEngine:
                 )
             )
 
+        # -----------------------------------------------------
+        # PRICE
+        # -----------------------------------------------------
+
         if ContextSignalType.PRICE_LOCATION in signal_set:
             reasons.append(
                 SetupReason(
@@ -552,6 +668,10 @@ class SetupEngine:
                     ),
                 )
             )
+
+        # -----------------------------------------------------
+        # VOLATILITY
+        # -----------------------------------------------------
 
         if ContextSignalType.VOLATILITY in signal_set:
             reasons.append(
@@ -566,12 +686,13 @@ class SetupEngine:
                 )
             )
 
-        if (
-            context.condition
-            in (
-                MarketCondition.TRENDING_UP,
-                MarketCondition.TRENDING_DOWN,
-            )
+        # -----------------------------------------------------
+        # TREND
+        # -----------------------------------------------------
+
+        if context.condition in (
+            MarketCondition.TRENDING_UP,
+            MarketCondition.TRENDING_DOWN,
         ):
             if (
                 (
@@ -629,9 +750,11 @@ class SetupEngine:
 
         Conflict penalties can reduce the score.
 
-        The score is intentionally independent of future trade
-        outcome.
+        Insufficient history receives an additional penalty.
+
+        The score is independent of future trade outcome.
         """
+
         if direction == SetupDirection.NONE:
             return 0.0
 
@@ -679,15 +802,18 @@ class SetupEngine:
             )
 
             if structure_signal is not None:
-                score += (
-                    max(
-                        0.0,
-                        min(
-                            100.0,
-                            structure_signal.strength,
+                structure_strength = max(
+                    0.0,
+                    min(
+                        100.0,
+                        float(
+                            structure_signal.strength
                         ),
-                    )
-                    * 0.20
+                    ),
+                )
+
+                score += (
+                    structure_strength * 0.20
                 )
 
         # -----------------------------------------------------
@@ -705,16 +831,31 @@ class SetupEngine:
                 signal_type,
             )
 
+            if signal is None:
+                continue
+
+            signal_bias_value = getattr(
+                signal.bias,
+                "value",
+                signal.bias,
+            )
+
+            context_bias_value = getattr(
+                context.bias,
+                "value",
+                context.bias,
+            )
+
             if (
-                signal is not None
-                and signal.bias == context.bias
+                signal_bias_value
+                == context_bias_value
             ):
                 momentum_strengths.append(
                     max(
                         0.0,
                         min(
                             100.0,
-                            signal.strength,
+                            float(signal.strength),
                         ),
                     )
                 )
@@ -738,20 +879,35 @@ class SetupEngine:
             ContextSignalType.PRICE_LOCATION,
         )
 
-        if (
-            price_signal is not None
-            and price_signal.bias == context.bias
-        ):
-            score += (
-                max(
-                    0.0,
-                    min(
-                        100.0,
-                        price_signal.strength,
-                    ),
-                )
-                * 0.10
+        if price_signal is not None:
+            signal_bias_value = getattr(
+                price_signal.bias,
+                "value",
+                price_signal.bias,
             )
+
+            context_bias_value = getattr(
+                context.bias,
+                "value",
+                context.bias,
+            )
+
+            if (
+                signal_bias_value
+                == context_bias_value
+            ):
+                score += (
+                    max(
+                        0.0,
+                        min(
+                            100.0,
+                            float(
+                                price_signal.strength
+                            ),
+                        ),
+                    )
+                    * 0.10
+                )
 
         # -----------------------------------------------------
         # CONFLICT PENALTY
@@ -774,9 +930,16 @@ class SetupEngine:
         if not context.sufficient_history:
             score -= 20.0
 
+        # -----------------------------------------------------
+        # BOUND SCORE
+        # -----------------------------------------------------
+
         return max(
             0.0,
-            min(100.0, score),
+            min(
+                100.0,
+                score,
+            ),
         )
 
     @staticmethod
@@ -784,6 +947,7 @@ class SetupEngine:
         context: MarketContext,
         direction: SetupDirection,
     ) -> float:
+
         if direction == SetupDirection.NONE:
             return 0.0
 
@@ -819,9 +983,7 @@ class SetupEngine:
 
     @staticmethod
     def _find_signal(
-        signals: Sequence[
-            object
-        ],
+        signals: Sequence[object],
         signal_type: ContextSignalType,
     ):
         for signal in signals:
@@ -850,17 +1012,38 @@ class SetupEngine:
             ContextSignalType
         ],
     ) -> bool:
+
+        # -----------------------------------------------------
+        # DATA
+        # -----------------------------------------------------
+
         if not context.sufficient_history:
             return False
+
+        # -----------------------------------------------------
+        # DIRECTION
+        # -----------------------------------------------------
 
         if direction == SetupDirection.NONE:
             return False
 
+        # -----------------------------------------------------
+        # SETUP TYPE
+        # -----------------------------------------------------
+
         if setup_type == SetupType.NONE:
             return False
 
+        # -----------------------------------------------------
+        # QUALITY
+        # -----------------------------------------------------
+
         if quality_score < self.minimum_setup_score:
             return False
+
+        # -----------------------------------------------------
+        # SUPPORTING SIGNALS
+        # -----------------------------------------------------
 
         if (
             len(supporting_signals)
@@ -868,17 +1051,29 @@ class SetupEngine:
         ):
             return False
 
+        # -----------------------------------------------------
+        # CONFLICTS
+        # -----------------------------------------------------
+
         if (
             len(conflicting_signals)
             > self.max_conflicts
         ):
             return False
 
+        # -----------------------------------------------------
+        # CONTEXT STRENGTH
+        # -----------------------------------------------------
+
         if (
             context.context_strength
             < self.minimum_setup_score
         ):
             return False
+
+        # -----------------------------------------------------
+        # TREND CONTINUATION
+        # -----------------------------------------------------
 
         if (
             setup_type
@@ -897,6 +1092,7 @@ class SetupEngine:
         context: MarketContext,
         direction: SetupDirection,
     ) -> bool:
+
         if (
             direction == SetupDirection.LONG
             and context.condition
