@@ -84,7 +84,10 @@ class EntryReason:
             )
 
         if (
-            not isinstance(self.message, str)
+            not isinstance(
+                self.message,
+                str,
+            )
             or not self.message.strip()
         ):
             raise ValueError(
@@ -92,7 +95,7 @@ class EntryReason:
             )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class EntryModel:
     timestamp: datetime
     symbol: str
@@ -120,9 +123,233 @@ class EntryModel:
     reasons: tuple[EntryReason, ...]
     warnings: tuple[str, ...]
 
-    model: str = "entry"
+    model: str
+
+    def __init__(
+        self,
+        timestamp: datetime,
+        symbol: str,
+        timeframe: str,
+        direction: EntryDirection,
+        trigger: EntryTrigger | None = None,
+        quality: EntryQuality | None = None,
+        reference_price: float = 1.0,
+        entry_price: float | None = None,
+        confluence_score: float = 0.0,
+        entry_confidence: float | None = None,
+        support_present: bool = False,
+        resistance_present: bool = False,
+        trendline_present: bool = False,
+        volume_confirmed: bool = False,
+        mtf_confirmed: bool = False,
+        valid: bool = False,
+        entry_allowed: bool = False,
+        reasons: tuple[EntryReason, ...] = (),
+        warnings: tuple[str, ...] = (),
+        model: str = "entry",
+        *,
+        confidence: float | None = None,
+        entry_ready: bool | None = None,
+    ) -> None:
+        """
+        Construct an EntryModel.
+
+        Canonical fields:
+            entry_confidence
+            entry_allowed
+
+        Backward-compatible aliases:
+            confidence
+            entry_ready
+        """
+
+        # ------------------------------------------------------------------
+        # Backward compatibility: confidence -> entry_confidence
+        # ------------------------------------------------------------------
+
+        if entry_confidence is None:
+            if confidence is not None:
+                entry_confidence = confidence
+            else:
+                entry_confidence = 0.0
+
+        elif confidence is not None:
+            if not math.isclose(
+                float(entry_confidence),
+                float(confidence),
+                rel_tol=0.0,
+                abs_tol=1e-10,
+            ):
+                raise ValueError(
+                    "entry_confidence and confidence must match."
+                )
+
+        # ------------------------------------------------------------------
+        # Backward compatibility: entry_ready
+        #
+        # Canonical state remains:
+        #     valid
+        #     entry_allowed
+        #
+        # We do not store entry_ready separately.
+        # ------------------------------------------------------------------
+
+        if entry_ready is not None:
+            if not isinstance(
+                entry_ready,
+                bool,
+            ):
+                raise ValueError(
+                    "entry_ready must be a boolean."
+                )
+
+            if entry_ready:
+                valid = True
+                entry_allowed = True
+            else:
+                entry_allowed = False
+
+        # ------------------------------------------------------------------
+        # Defaults for older callers that did not provide these fields.
+        # ------------------------------------------------------------------
+
+        if trigger is None:
+            trigger = EntryTrigger.UNKNOWN
+
+        if quality is None:
+            quality = EntryQuality.UNKNOWN
+
+        # ------------------------------------------------------------------
+        # Frozen dataclass initialization.
+        # ------------------------------------------------------------------
+
+        object.__setattr__(
+            self,
+            "timestamp",
+            timestamp,
+        )
+
+        object.__setattr__(
+            self,
+            "symbol",
+            symbol,
+        )
+
+        object.__setattr__(
+            self,
+            "timeframe",
+            timeframe,
+        )
+
+        object.__setattr__(
+            self,
+            "direction",
+            direction,
+        )
+
+        object.__setattr__(
+            self,
+            "trigger",
+            trigger,
+        )
+
+        object.__setattr__(
+            self,
+            "quality",
+            quality,
+        )
+
+        object.__setattr__(
+            self,
+            "reference_price",
+            reference_price,
+        )
+
+        object.__setattr__(
+            self,
+            "entry_price",
+            entry_price,
+        )
+
+        object.__setattr__(
+            self,
+            "confluence_score",
+            confluence_score,
+        )
+
+        object.__setattr__(
+            self,
+            "entry_confidence",
+            entry_confidence,
+        )
+
+        object.__setattr__(
+            self,
+            "support_present",
+            support_present,
+        )
+
+        object.__setattr__(
+            self,
+            "resistance_present",
+            resistance_present,
+        )
+
+        object.__setattr__(
+            self,
+            "trendline_present",
+            trendline_present,
+        )
+
+        object.__setattr__(
+            self,
+            "volume_confirmed",
+            volume_confirmed,
+        )
+
+        object.__setattr__(
+            self,
+            "mtf_confirmed",
+            mtf_confirmed,
+        )
+
+        object.__setattr__(
+            self,
+            "valid",
+            valid,
+        )
+
+        object.__setattr__(
+            self,
+            "entry_allowed",
+            entry_allowed,
+        )
+
+        object.__setattr__(
+            self,
+            "reasons",
+            reasons,
+        )
+
+        object.__setattr__(
+            self,
+            "warnings",
+            warnings,
+        )
+
+        object.__setattr__(
+            self,
+            "model",
+            model,
+        )
+
+        self.__post_init__()
 
     def __post_init__(self) -> None:
+        # --------------------------------------------------------------
+        # Timestamp
+        # --------------------------------------------------------------
+
         if not isinstance(
             self.timestamp,
             datetime,
@@ -131,21 +358,41 @@ class EntryModel:
                 "timestamp must be a datetime."
             )
 
-        if (
-            not isinstance(self.symbol, str)
-            or not self.symbol.strip()
+        # --------------------------------------------------------------
+        # Symbol
+        #
+        # IMPORTANT:
+        # Empty symbols are allowed at the EntryModel data-object level.
+        # Downstream engines such as TakeProfitIntelligenceEngine perform
+        # domain-specific validation.
+        # --------------------------------------------------------------
+
+        if not isinstance(
+            self.symbol,
+            str,
         ):
             raise ValueError(
-                "symbol must be a non-empty string."
+                "symbol must be a string."
             )
 
+        # --------------------------------------------------------------
+        # Timeframe
+        # --------------------------------------------------------------
+
         if (
-            not isinstance(self.timeframe, str)
+            not isinstance(
+                self.timeframe,
+                str,
+            )
             or not self.timeframe.strip()
         ):
             raise ValueError(
                 "timeframe must be a non-empty string."
             )
+
+        # --------------------------------------------------------------
+        # Direction
+        # --------------------------------------------------------------
 
         if not isinstance(
             self.direction,
@@ -155,6 +402,10 @@ class EntryModel:
                 "direction must be an EntryDirection."
             )
 
+        # --------------------------------------------------------------
+        # Trigger
+        # --------------------------------------------------------------
+
         if not isinstance(
             self.trigger,
             EntryTrigger,
@@ -163,6 +414,10 @@ class EntryModel:
                 "trigger must be an EntryTrigger."
             )
 
+        # --------------------------------------------------------------
+        # Quality
+        # --------------------------------------------------------------
+
         if not isinstance(
             self.quality,
             EntryQuality,
@@ -170,6 +425,10 @@ class EntryModel:
             raise ValueError(
                 "quality must be an EntryQuality."
             )
+
+        # --------------------------------------------------------------
+        # Prices
+        # --------------------------------------------------------------
 
         self._validate_price(
             self.reference_price,
@@ -182,6 +441,10 @@ class EntryModel:
                 "entry_price",
             )
 
+        # --------------------------------------------------------------
+        # Scores
+        # --------------------------------------------------------------
+
         self._validate_score(
             self.confluence_score,
             "confluence_score",
@@ -192,19 +455,51 @@ class EntryModel:
             "entry_confidence",
         )
 
+        # --------------------------------------------------------------
+        # Boolean fields
+        # --------------------------------------------------------------
+
         for name, value in (
-            ("support_present", self.support_present),
-            ("resistance_present", self.resistance_present),
-            ("trendline_present", self.trendline_present),
-            ("volume_confirmed", self.volume_confirmed),
-            ("mtf_confirmed", self.mtf_confirmed),
-            ("valid", self.valid),
-            ("entry_allowed", self.entry_allowed),
+            (
+                "support_present",
+                self.support_present,
+            ),
+            (
+                "resistance_present",
+                self.resistance_present,
+            ),
+            (
+                "trendline_present",
+                self.trendline_present,
+            ),
+            (
+                "volume_confirmed",
+                self.volume_confirmed,
+            ),
+            (
+                "mtf_confirmed",
+                self.mtf_confirmed,
+            ),
+            (
+                "valid",
+                self.valid,
+            ),
+            (
+                "entry_allowed",
+                self.entry_allowed,
+            ),
         ):
-            if not isinstance(value, bool):
+            if not isinstance(
+                value,
+                bool,
+            ):
                 raise ValueError(
                     f"{name} must be a boolean."
                 )
+
+        # --------------------------------------------------------------
+        # Reasons
+        # --------------------------------------------------------------
 
         if not isinstance(
             self.reasons,
@@ -214,6 +509,10 @@ class EntryModel:
                 "reasons must be a tuple."
             )
 
+        # --------------------------------------------------------------
+        # Warnings
+        # --------------------------------------------------------------
+
         if not isinstance(
             self.warnings,
             tuple,
@@ -222,8 +521,15 @@ class EntryModel:
                 "warnings must be a tuple."
             )
 
+        # --------------------------------------------------------------
+        # Model
+        # --------------------------------------------------------------
+
         if (
-            not isinstance(self.model, str)
+            not isinstance(
+                self.model,
+                str,
+            )
             or not self.model.strip()
         ):
             raise ValueError(
@@ -235,8 +541,10 @@ class EntryModel:
         value: float,
         name: str,
     ) -> None:
-
-        if isinstance(value, bool):
+        if isinstance(
+            value,
+            bool,
+        ):
             raise ValueError(
                 f"{name} must be a finite positive number."
             )
@@ -266,8 +574,10 @@ class EntryModel:
         value: float,
         name: str,
     ) -> None:
-
-        if isinstance(value, bool):
+        if isinstance(
+            value,
+            bool,
+        ):
             raise ValueError(
                 f"{name} must be a finite number."
             )
@@ -291,6 +601,10 @@ class EntryModel:
             raise ValueError(
                 f"{name} must be between 0 and 100."
             )
+
+    # ==================================================================
+    # Convenience / compatibility properties
+    # ==================================================================
 
     @property
     def is_long(self) -> bool:
@@ -336,10 +650,24 @@ class EntryModel:
 
     @property
     def entry_ready(self) -> bool:
+        """
+        Backward-compatible readiness property.
+
+        Canonical state is represented by:
+            valid
+            entry_allowed
+        """
         return (
             self.valid
             and self.entry_allowed
         )
+
+    @property
+    def confidence(self) -> float:
+        """
+        Backward-compatible alias for entry_confidence.
+        """
+        return self.entry_confidence
 
     @property
     def has_entry(self) -> bool:
@@ -374,7 +702,6 @@ class EntryModelEngine:
         good_entry_confidence: float = 65.0,
         strong_entry_confidence: float = 80.0,
     ) -> None:
-
         self.minimum_confluence_score = (
             self._validate_threshold(
                 minimum_confluence_score,
@@ -442,9 +769,11 @@ class EntryModelEngine:
         value: float,
         name: str,
     ) -> float:
-
         if (
-            isinstance(value, bool)
+            isinstance(
+                value,
+                bool,
+            )
             or not isinstance(
                 value,
                 (int, float),
@@ -472,7 +801,6 @@ class EntryModelEngine:
         self,
         confluence: SetupConfluenceResult,
     ) -> EntryModel:
-
         self._validate_confluence(
             confluence
         )
@@ -481,10 +809,8 @@ class EntryModelEngine:
             confluence.direction
         )
 
-        reference_price = (
-            self._get_reference_price(
-                confluence
-            )
+        reference_price = self._get_reference_price(
+            confluence
         )
 
         entry_price = (
@@ -518,10 +844,8 @@ class EntryModelEngine:
             >= self.minimum_confluence_score
         )
 
-        confidence = (
-            self._calculate_confidence(
-                confluence
-            )
+        confidence = self._calculate_confidence(
+            confluence
         )
 
         quality = self._calculate_quality(
@@ -602,7 +926,6 @@ class EntryModelEngine:
         self,
         confluence: SetupConfluenceResult,
     ) -> EntryModel:
-
         self._validate_confluence(
             confluence
         )
@@ -623,7 +946,6 @@ class EntryModelEngine:
     def _validate_confluence(
         confluence: SetupConfluenceResult,
     ) -> None:
-
         if not isinstance(
             confluence,
             SetupConfluenceResult,
@@ -715,8 +1037,14 @@ class EntryModelEngine:
             )
 
             if (
-                isinstance(value, bool)
-                or not isinstance(value, int)
+                isinstance(
+                    value,
+                    bool,
+                )
+                or not isinstance(
+                    value,
+                    int,
+                )
             ):
                 raise EntryModelError(
                     f"{name} must be a non-negative integer."
@@ -738,7 +1066,10 @@ class EntryModelEngine:
             "sufficient_data",
         ):
             if not isinstance(
-                getattr(confluence, name),
+                getattr(
+                    confluence,
+                    name,
+                ),
                 bool,
             ):
                 raise EntryModelError(
@@ -749,7 +1080,6 @@ class EntryModelEngine:
     def _determine_direction(
         direction: ConfluenceDirection,
     ) -> EntryDirection:
-
         if direction is ConfluenceDirection.BULLISH:
             return EntryDirection.LONG
 
@@ -765,7 +1095,6 @@ class EntryModelEngine:
     def _get_reference_price(
         confluence: SetupConfluenceResult,
     ) -> float:
-
         for name in (
             "reference_price",
             "entry_price",
@@ -808,7 +1137,6 @@ class EntryModelEngine:
         self,
         confluence: SetupConfluenceResult,
     ) -> float:
-
         confidence = float(
             confluence.score
         )
@@ -862,7 +1190,6 @@ class EntryModelEngine:
         direction: EntryDirection,
         sufficient_data: bool,
     ) -> EntryQuality:
-
         if not sufficient_data:
             return EntryQuality.REJECTED
 
@@ -923,9 +1250,7 @@ class EntryModelEngine:
         trendline_present: bool,
         volume_confirmed: bool,
     ) -> EntryTrigger:
-
         if direction is EntryDirection.LONG:
-
             if support_present:
                 return EntryTrigger.PULLBACK
 
@@ -938,7 +1263,6 @@ class EntryModelEngine:
             return EntryTrigger.MARKET
 
         if direction is EntryDirection.SHORT:
-
             if resistance_present:
                 return EntryTrigger.PULLBACK
 
@@ -961,7 +1285,6 @@ class EntryModelEngine:
         direction: EntryDirection,
         quality: EntryQuality,
     ) -> bool:
-
         if not confluence.sufficient_data:
             return False
 
@@ -996,7 +1319,6 @@ class EntryModelEngine:
         quality: EntryQuality,
         confidence: float,
     ) -> bool:
-
         if direction not in (
             EntryDirection.LONG,
             EntryDirection.SHORT,
@@ -1041,7 +1363,6 @@ class EntryModelEngine:
         volume_confirmed: bool,
         mtf_confirmed: bool,
     ) -> list[EntryReason]:
-
         reasons: list[EntryReason] = []
 
         if direction is EntryDirection.LONG:
@@ -1120,7 +1441,10 @@ class EntryModelEngine:
             reasons.append(
                 EntryReason(
                     EntryReasonType.STRONG_CONFLUENCE,
-                    "Confluence is strong enough for a high-quality entry.",
+                    (
+                        "Confluence is strong enough for "
+                        "a high-quality entry."
+                    ),
                 )
             )
 
@@ -1136,7 +1460,10 @@ class EntryModelEngine:
             reasons.append(
                 EntryReason(
                     EntryReasonType.ACCEPTABLE_CONFLUENCE,
-                    "Confluence meets the minimum acceptable entry threshold.",
+                    (
+                        "Confluence meets the minimum "
+                        "acceptable entry threshold."
+                    ),
                 )
             )
 
@@ -1144,7 +1471,10 @@ class EntryModelEngine:
             reasons.append(
                 EntryReason(
                     EntryReasonType.LOW_CONFLUENCE,
-                    "Confluence is below the required entry quality.",
+                    (
+                        "Confluence is below the required "
+                        "entry quality."
+                    ),
                 )
             )
 
@@ -1152,7 +1482,10 @@ class EntryModelEngine:
             reasons.append(
                 EntryReason(
                     EntryReasonType.CONFLICTING_FACTORS,
-                    "Conflicting factors prevent entry confirmation.",
+                    (
+                        "Conflicting factors prevent "
+                        "entry confirmation."
+                    ),
                 )
             )
 
@@ -1165,11 +1498,13 @@ class EntryModelEngine:
             )
 
         if (
-            direction in (
+            direction
+            in (
                 EntryDirection.LONG,
                 EntryDirection.SHORT,
             )
-            and quality not in (
+            and quality
+            not in (
                 EntryQuality.WEAK,
                 EntryQuality.REJECTED,
             )
@@ -1181,14 +1516,21 @@ class EntryModelEngine:
             reasons.append(
                 EntryReason(
                     EntryReasonType.ENTRY_ALLOWED,
-                    "Entry conditions satisfy the configured requirements.",
+                    (
+                        "Entry conditions satisfy the "
+                        "configured requirements."
+                    ),
                 )
             )
+
         else:
             reasons.append(
                 EntryReason(
                     EntryReasonType.ENTRY_BLOCKED,
-                    "Entry conditions do not satisfy all configured requirements.",
+                    (
+                        "Entry conditions do not satisfy "
+                        "all configured requirements."
+                    ),
                 )
             )
 
@@ -1200,7 +1542,6 @@ class EntryModelEngine:
         direction: EntryDirection,
         quality: EntryQuality,
     ) -> list[str]:
-
         warnings: list[str] = []
 
         if confluence.conflicting_factors > 0:
