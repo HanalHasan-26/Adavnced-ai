@@ -655,3 +655,164 @@ def test_resistance_short_level_above_entry_is_valid():
     assert result.stop_loss == pytest.approx(
         2010.0,
     )
+
+# ---------------------------------------------------------
+# P2.14 hardening tests
+# ---------------------------------------------------------
+
+
+def test_long_stop_too_far_is_blocked():
+    # Create an engine with a 5% maximum risk distance.
+    engine = StopLossIntelligenceEngine(
+        maximum_risk_percent=5.0,
+    )
+
+    # A stop at 1800 is 10% below the 2000 entry price.
+    result = engine.analyze(
+        make_entry(entry_price=2000.0),
+        structural_level=1800.0,
+    )
+
+    # The stop itself must be considered invalid.
+    assert result.valid is False
+
+    # The engine must not allow the stop to be used.
+    assert result.stop_loss_ready is False
+
+    # The calculated risk must exceed the configured limit.
+    assert result.risk_percent_of_entry > 5.0
+
+    # The result should explain that the stop is too far away.
+    assert any(
+        reason.reason_type is StopLossReasonType.STOP_TOO_FAR
+        for reason in result.reasons
+    )
+
+
+def test_short_stop_too_far_is_blocked():
+    # Create an engine with a 5% maximum risk distance.
+    engine = StopLossIntelligenceEngine(
+        maximum_risk_percent=5.0,
+    )
+
+    # A stop at 2200 is 10% above the 2000 entry price.
+    result = engine.analyze(
+        make_entry(
+            direction=EntryDirection.SHORT,
+            entry_price=2000.0,
+        ),
+        structural_level=2200.0,
+    )
+
+    # The stop itself must be considered invalid.
+    assert result.valid is False
+
+    # The engine must not allow the stop to be used.
+    assert result.stop_loss_ready is False
+
+    # The calculated risk must exceed the configured limit.
+    assert result.risk_percent_of_entry > 5.0
+
+    # The result should explain that the stop is too far away.
+    assert any(
+        reason.reason_type is StopLossReasonType.STOP_TOO_FAR
+        for reason in result.reasons
+    )
+
+
+def test_exact_maximum_risk_boundary_is_allowed():
+    # Create an engine with a 5% maximum risk distance.
+    engine = StopLossIntelligenceEngine(
+        maximum_risk_percent=5.0,
+    )
+
+    # A stop at 1900 is exactly 5% below a 2000 entry.
+    result = engine.analyze(
+        make_entry(entry_price=2000.0),
+        structural_level=1900.0,
+    )
+
+    # Exactly the configured boundary should remain valid.
+    assert result.risk_percent_of_entry == pytest.approx(5.0)
+    assert result.valid is True
+    assert result.stop_loss_ready is True
+
+
+def test_huge_atr_cannot_move_long_stop_to_entry():
+    # Start with a valid long stop below the entry.
+    result = StopLossIntelligenceEngine().analyze(
+        make_entry(entry_price=2000.0),
+        structural_level=1990.0,
+        atr_value=10000.0,
+    )
+
+    # ATR buffering must never place a long stop at or above entry.
+    assert result.stop_loss is None or result.stop_loss < result.entry_price
+
+    # A stop that violates the long-side rule cannot be ready.
+    if result.stop_loss is not None:
+        assert result.valid is True
+        assert result.stop_loss_ready is True
+
+
+def test_huge_atr_cannot_move_short_stop_to_entry():
+    # Start with a valid short stop above the entry.
+    result = StopLossIntelligenceEngine().analyze(
+        make_entry(
+            direction=EntryDirection.SHORT,
+            entry_price=2000.0,
+        ),
+        structural_level=2010.0,
+        atr_value=10000.0,
+    )
+
+    # ATR buffering must never place a short stop at or below entry.
+    assert result.stop_loss is None or result.stop_loss > result.entry_price
+
+    # A stop that violates the short-side rule cannot be ready.
+    if result.stop_loss is not None:
+        assert result.valid is True
+        assert result.stop_loss_ready is True
+
+
+def test_exact_minimum_distance_is_allowed():
+    # Use a custom minimum distance of 10 points.
+    engine = StopLossIntelligenceEngine(
+        minimum_distance=10.0,
+    )
+
+    # Place the long stop exactly 10 points below entry.
+    result = engine.analyze(
+        make_entry(entry_price=2000.0),
+        structural_level=1990.0,
+    )
+
+    # Exactly the minimum distance should be accepted.
+    assert result.risk_distance == pytest.approx(10.0)
+    assert result.valid is True
+    assert result.stop_loss_ready is True
+
+
+def test_below_minimum_distance_is_blocked():
+    # Use a custom minimum distance of 10 points.
+    engine = StopLossIntelligenceEngine(
+        minimum_distance=10.0,
+    )
+
+    # Place the stop only 5 points below the entry.
+    result = engine.analyze(
+        make_entry(entry_price=2000.0),
+        structural_level=1995.0,
+    )
+
+    # The stop is too close to the entry.
+    assert result.valid is False
+
+    # It must not be usable.
+    assert result.stop_loss_ready is False
+
+    # The engine must report the distance violation.
+    assert any(
+        reason.reason_type is StopLossReasonType.STOP_TOO_CLOSE
+        for reason in result.reasons
+    )

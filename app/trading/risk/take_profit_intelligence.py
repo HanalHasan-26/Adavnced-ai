@@ -13,6 +13,8 @@ class TakeProfitIntelligenceError(ValueError):
 
 
 class TakeProfitMethod(str, Enum):
+    """Methods that can be used to determine a take-profit target."""
+
     NONE = "NONE"
     RISK_REWARD = "RISK_REWARD"
     STRUCTURE = "STRUCTURE"
@@ -22,6 +24,8 @@ class TakeProfitMethod(str, Enum):
 
 
 class TakeProfitQuality(str, Enum):
+    """Quality classification for the selected take-profit."""
+
     INVALID = "INVALID"
     POOR = "POOR"
     ACCEPTABLE = "ACCEPTABLE"
@@ -30,32 +34,42 @@ class TakeProfitQuality(str, Enum):
 
 
 class TakeProfitReasonType(str, Enum):
+    """Reason codes explaining the take-profit decision."""
+
     RISK_REWARD_TARGET = "RISK_REWARD_TARGET"
     STRUCTURAL_TARGET = "STRUCTURAL_TARGET"
     SUPPORT_RESISTANCE_TARGET = "SUPPORT_RESISTANCE_TARGET"
     TRENDLINE_TARGET = "TRENDLINE_TARGET"
     HYBRID_TARGET = "HYBRID_TARGET"
+
     TARGET_TOO_CLOSE = "TARGET_TOO_CLOSE"
     TARGET_WRONG_SIDE = "TARGET_WRONG_SIDE"
+
     INVALID_STOP_LOSS = "INVALID_STOP_LOSS"
     INVALID_DIRECTION = "INVALID_DIRECTION"
     INVALID_ENTRY = "INVALID_ENTRY"
     INVALID_SYMBOL = "INVALID_SYMBOL"
     INVALID_RISK_REWARD = "INVALID_RISK_REWARD"
+
     HIGH_RISK_REWARD = "HIGH_RISK_REWARD"
     GOOD_RISK_REWARD = "GOOD_RISK_REWARD"
     ACCEPTABLE_RISK_REWARD = "ACCEPTABLE_RISK_REWARD"
+
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
 
 
 @dataclass(frozen=True, slots=True)
 class TakeProfitReason:
+    """Structured explanation for a take-profit decision."""
+
     reason_type: TakeProfitReasonType
     message: str
 
 
 @dataclass(frozen=True, slots=True)
 class TakeProfitModel:
+    """Immutable result produced by the take-profit engine."""
+
     timestamp: object
     symbol: str
     timeframe: str
@@ -82,39 +96,63 @@ class TakeProfitModel:
 
     @property
     def is_long(self) -> bool:
+        """Return True when the trade direction is LONG."""
+
         return self.direction is EntryDirection.LONG
 
     @property
     def is_short(self) -> bool:
+        """Return True when the trade direction is SHORT."""
+
         return self.direction is EntryDirection.SHORT
 
     @property
     def has_take_profit(self) -> bool:
+        """Return True when a take-profit exists."""
+
         return self.take_profit is not None
 
     @property
     def is_ready(self) -> bool:
+        """Return whether the take-profit is ready."""
+
         return self.take_profit_ready
 
     @property
     def reward(self) -> float:
+        """Return the calculated reward distance."""
+
         return self.reward_distance
 
     @property
     def rr(self) -> float:
+        """Return the calculated risk/reward ratio."""
+
         return self.risk_reward_ratio
 
 
 class TakeProfitIntelligenceEngine:
     """
-    Determines a take-profit target from:
+    Determine a technically valid take-profit target.
+
+    Target sources:
 
     1. Structural level
     2. Support/resistance
     3. Trendline
     4. Minimum risk/reward fallback
 
-    This engine does not calculate position size or account risk.
+    This engine does NOT calculate:
+
+    - position size
+    - lot size
+    - account risk
+    - daily loss
+    - drawdown
+    - trade execution
+
+    Those responsibilities belong to the Risk Engine and execution
+    layers.
     """
 
     def __init__(
@@ -126,26 +164,31 @@ class TakeProfitIntelligenceEngine:
         good_score: float = 70.0,
         acceptable_score: float = 50.0,
     ) -> None:
+        # Store and validate the minimum RR requirement.
         self.minimum_risk_reward = self._validate_positive(
             minimum_risk_reward,
             "minimum_risk_reward",
         )
 
+        # Store and validate the minimum price distance.
         self.minimum_distance = self._validate_positive(
             minimum_distance,
             "minimum_distance",
         )
 
+        # Store and validate the maximum allowed RR.
         self.maximum_risk_reward = self._validate_positive(
             maximum_risk_reward,
             "maximum_risk_reward",
         )
 
+        # The minimum RR can never exceed the maximum RR.
         if self.minimum_risk_reward > self.maximum_risk_reward:
             raise TakeProfitIntelligenceError(
                 "minimum_risk_reward cannot exceed maximum_risk_reward."
             )
 
+        # Validate quality thresholds.
         self.excellent_score = self._validate_score(
             excellent_score,
             "excellent_score",
@@ -161,6 +204,7 @@ class TakeProfitIntelligenceEngine:
             "acceptable_score",
         )
 
+        # Ensure quality thresholds are correctly ordered.
         if not (
             self.excellent_score
             > self.good_score
@@ -183,22 +227,33 @@ class TakeProfitIntelligenceEngine:
         reference_price: Optional[float] = None,
         minimum_risk_reward: Optional[float] = None,
     ) -> TakeProfitModel:
+        """
+        Analyze an entry and determine the best take-profit.
+
+        The EntryModel entry price remains the basis for risk-distance
+        calculation. An explicit reference_price can override the
+        target-selection reference price.
+        """
+
+        # Validate the EntryModel before using it.
         self._validate_entry(entry)
 
-        minimum_rr = (
-            self.minimum_risk_reward
-            if minimum_risk_reward is None
-            else self._validate_positive(
+        # Resolve the configured minimum RR.
+        if minimum_risk_reward is None:
+            minimum_rr = self.minimum_risk_reward
+        else:
+            minimum_rr = self._validate_positive(
                 minimum_risk_reward,
                 "minimum_risk_reward",
             )
-        )
 
+        # The requested minimum RR cannot exceed the engine maximum.
         if minimum_rr > self.maximum_risk_reward:
             raise TakeProfitIntelligenceError(
                 "minimum_risk_reward cannot exceed maximum_risk_reward."
             )
 
+        # Validate every optional target level.
         self._validate_optional_price(
             structural_level,
             "structural_level",
@@ -219,19 +274,23 @@ class TakeProfitIntelligenceEngine:
             "trendline_level",
         )
 
+        # Validate the original entry price.
         original_entry = self._validate_price(
             entry.entry_price,
             "entry.entry_price",
         )
 
+        # By default the effective target reference is the entry price.
         effective_entry = original_entry
 
+        # An explicit reference price overrides the target reference.
         if reference_price is not None:
             effective_entry = self._validate_price(
                 reference_price,
                 "reference_price",
             )
 
+        # TP calculation cannot continue without an SL.
         if stop_loss is None:
             return self._invalid_result(
                 entry=entry,
@@ -245,14 +304,20 @@ class TakeProfitIntelligenceEngine:
                 ),
             )
 
+        # Validate the stop-loss price.
         stop_loss_value = self._validate_price(
             stop_loss,
             "stop_loss",
         )
 
+        # Read the trade direction.
         direction = entry.direction
 
-        if direction is EntryDirection.NONE or direction is EntryDirection.UNKNOWN:
+        # NONE and UNKNOWN directions cannot produce a TP.
+        if (
+            direction is EntryDirection.NONE
+            or direction is EntryDirection.UNKNOWN
+        ):
             return self._invalid_result(
                 entry=entry,
                 entry_price=effective_entry,
@@ -262,8 +327,10 @@ class TakeProfitIntelligenceEngine:
                 message="Entry direction must be LONG or SHORT.",
             )
 
+        # Preserve the existing risk-distance contract.
         calculation_entry = original_entry
 
+        # LONG trades require SL below entry.
         if direction is EntryDirection.LONG:
             if stop_loss_value >= calculation_entry:
                 return self._invalid_result(
@@ -278,6 +345,7 @@ class TakeProfitIntelligenceEngine:
                     ),
                 )
 
+        # SHORT trades require SL above entry.
         elif direction is EntryDirection.SHORT:
             if stop_loss_value <= calculation_entry:
                 return self._invalid_result(
@@ -292,10 +360,12 @@ class TakeProfitIntelligenceEngine:
                     ),
                 )
 
+        # Calculate the absolute risk distance.
         risk_distance = abs(
             calculation_entry - stop_loss_value
         )
 
+        # Reject an unusably small stop distance.
         if risk_distance <= self.minimum_distance:
             return self._invalid_result(
                 entry=entry,
@@ -306,6 +376,7 @@ class TakeProfitIntelligenceEngine:
                 message="Stop-loss is too close to the entry price.",
             )
 
+        # Calculate the deterministic minimum-RR fallback.
         rr_target = self._calculate_rr_target(
             effective_entry,
             risk_distance,
@@ -313,8 +384,10 @@ class TakeProfitIntelligenceEngine:
             minimum_rr,
         )
 
+        # Build all supplied target candidates.
         candidates = []
 
+        # Add structural target when available.
         if structural_level is not None:
             candidates.append(
                 (
@@ -325,6 +398,7 @@ class TakeProfitIntelligenceEngine:
                 )
             )
 
+        # Add resistance target when available.
         if resistance_level is not None:
             candidates.append(
                 (
@@ -335,6 +409,7 @@ class TakeProfitIntelligenceEngine:
                 )
             )
 
+        # Add support target when available.
         if support_level is not None:
             candidates.append(
                 (
@@ -345,6 +420,7 @@ class TakeProfitIntelligenceEngine:
                 )
             )
 
+        # Add trendline target when available.
         if trendline_level is not None:
             candidates.append(
                 (
@@ -355,6 +431,17 @@ class TakeProfitIntelligenceEngine:
                 )
             )
 
+        # Calculate the exact minimum reward required.
+        minimum_reward = (
+            risk_distance * minimum_rr
+        )
+
+        # Calculate the maximum reward allowed.
+        maximum_reward = (
+            risk_distance * self.maximum_risk_reward
+        )
+
+        # Store only targets that satisfy every TP policy.
         valid_candidates = []
 
         for (
@@ -363,33 +450,43 @@ class TakeProfitIntelligenceEngine:
             reason_type,
             message,
         ) in candidates:
-            if self._is_valid_target_side(
+
+            # Reject targets on the wrong side of entry.
+            if not self._is_valid_target_side(
                 effective_entry,
                 level,
                 direction,
             ):
-                reward = abs(
-                    level - effective_entry
+                continue
+
+            # Calculate reward distance.
+            reward = abs(
+                level - effective_entry
+            )
+
+            # Reject targets below the exact minimum RR boundary.
+            if reward < minimum_reward:
+                continue
+
+            # Reject targets above the configured maximum RR boundary.
+            if reward > maximum_reward:
+                continue
+
+            # Store the valid target candidate.
+            valid_candidates.append(
+                (
+                    level,
+                    method,
+                    reason_type,
+                    message,
+                    reward,
                 )
+            )
 
-                if reward + self.minimum_distance >= (
-                    risk_distance * minimum_rr
-                ):
-                    valid_candidates.append(
-                        (
-                            level,
-                            method,
-                            reason_type,
-                            message,
-                            reward,
-                        )
-                    )
-
+        # Default target selection is the RR fallback.
         selected_target = None
 
-        selected_method = (
-            TakeProfitMethod.RISK_REWARD
-        )
+        selected_method = TakeProfitMethod.RISK_REWARD
 
         selected_reason_type = (
             TakeProfitReasonType.RISK_REWARD_TARGET
@@ -400,6 +497,7 @@ class TakeProfitIntelligenceEngine:
             "minimum risk/reward requirement."
         )
 
+        # Prefer the nearest valid market-structure target.
         if valid_candidates:
             valid_candidates.sort(
                 key=lambda item: item[4],
@@ -410,6 +508,7 @@ class TakeProfitIntelligenceEngine:
             selected_reason_type = valid_candidates[0][2]
             selected_message = valid_candidates[0][3]
 
+            # Find target methods agreeing around the same level.
             same_level_methods = {
                 item[1]
                 for item in valid_candidates
@@ -421,15 +520,14 @@ class TakeProfitIntelligenceEngine:
                 )
             }
 
+            # Structure + S/R agreement becomes HYBRID.
             if (
                 TakeProfitMethod.STRUCTURE
                 in same_level_methods
                 and TakeProfitMethod.SUPPORT_RESISTANCE
                 in same_level_methods
             ):
-                selected_method = (
-                    TakeProfitMethod.HYBRID
-                )
+                selected_method = TakeProfitMethod.HYBRID
 
                 selected_reason_type = (
                     TakeProfitReasonType.HYBRID_TARGET
@@ -440,32 +538,34 @@ class TakeProfitIntelligenceEngine:
                     "agree on the same take-profit level."
                 )
 
+        # If no valid market target exists, use RR fallback.
         else:
             selected_target = rr_target
 
+        # Normalize the final target precision.
         selected_target = round(
             selected_target,
             10,
         )
 
+        # Calculate the final reward distance.
         reward_distance = abs(
             selected_target - effective_entry
         )
 
+        # Defensive invariant.
         if risk_distance <= 0.0:
             raise TakeProfitIntelligenceError(
                 "risk distance must be greater than zero."
             )
 
+        # Calculate the final risk/reward ratio.
         risk_reward_ratio = (
             reward_distance / risk_distance
         )
 
-        if (
-            risk_reward_ratio
-            + self.minimum_distance
-            < minimum_rr
-        ):
+        # Final exact minimum-RR validation.
+        if risk_reward_ratio < minimum_rr:
             return self._invalid_result(
                 entry=entry,
                 entry_price=effective_entry,
@@ -478,15 +578,32 @@ class TakeProfitIntelligenceEngine:
                 ),
             )
 
+        # Final maximum-RR validation.
+        if risk_reward_ratio > self.maximum_risk_reward:
+            return self._invalid_result(
+                entry=entry,
+                entry_price=effective_entry,
+                stop_loss=stop_loss_value,
+                minimum_rr=minimum_rr,
+                reason_type=TakeProfitReasonType.INVALID_RISK_REWARD,
+                message=(
+                    "The selected target exceeds the configured "
+                    "maximum risk/reward requirement."
+                ),
+            )
+
+        # Calculate deterministic quality score.
         quality_score = self._calculate_quality_score(
             risk_reward_ratio,
             selected_method,
         )
 
+        # Convert score into quality enum.
         quality = self._quality_from_score(
             quality_score,
         )
 
+        # Start structured reason collection.
         reasons = [
             TakeProfitReason(
                 selected_reason_type,
@@ -494,6 +611,7 @@ class TakeProfitIntelligenceEngine:
             ),
         ]
 
+        # Add high-RR classification.
         if risk_reward_ratio >= 4.0:
             reasons.append(
                 TakeProfitReason(
@@ -502,6 +620,7 @@ class TakeProfitIntelligenceEngine:
                 )
             )
 
+        # Add good-RR classification.
         elif risk_reward_ratio >= 3.0:
             reasons.append(
                 TakeProfitReason(
@@ -510,6 +629,7 @@ class TakeProfitIntelligenceEngine:
                 )
             )
 
+        # Add acceptable-RR classification.
         else:
             reasons.append(
                 TakeProfitReason(
@@ -521,10 +641,12 @@ class TakeProfitIntelligenceEngine:
                 )
             )
 
+        # P2.15 does not calculate account-level risk.
         warnings = (
             "15R does not calculate position size or account risk.",
         )
 
+        # Return the final immutable TP model.
         return TakeProfitModel(
             timestamp=entry.timestamp,
             symbol=entry.symbol,
@@ -576,11 +698,15 @@ class TakeProfitIntelligenceEngine:
         reference_price: Optional[float] = None,
         minimum_risk_reward: Optional[float] = None,
     ) -> TakeProfitModel:
+        """Analyze an XAUUSD entry."""
+
+        # Enforce the XAUUSD-specific API contract.
         if entry.symbol != "XAUUSD":
             raise TakeProfitIntelligenceError(
                 "analyze_xauusd requires symbol XAUUSD."
             )
 
+        # Delegate to the generic analyzer.
         return self.analyze(
             entry,
             stop_loss=stop_loss,
@@ -599,36 +725,43 @@ class TakeProfitIntelligenceEngine:
         direction: EntryDirection,
         minimum_rr: float,
     ) -> float:
+        """Calculate the deterministic minimum-RR fallback target."""
+
+        # Convert risk into the required reward.
         reward_distance = (
             risk_distance * minimum_rr
         )
 
+        # LONG TP must be above entry.
         if direction is EntryDirection.LONG:
             return entry_price + reward_distance
 
+        # SHORT TP must be below entry.
         if direction is EntryDirection.SHORT:
             return entry_price - reward_distance
 
+        # Defensive direction validation.
         raise TakeProfitIntelligenceError(
-            "invalid direction."
+            "direction must be LONG or SHORT."
         )
 
     def _is_valid_target_side(
         self,
         entry_price: float,
-        target: float,
+        target_price: float,
         direction: EntryDirection,
     ) -> bool:
+        """Check whether the target is on the profitable side."""
+
+        # LONG target must be above entry.
         if direction is EntryDirection.LONG:
-            return target > (
-                entry_price + self.minimum_distance
-            )
+            return target_price > entry_price
 
+        # SHORT target must be below entry.
         if direction is EntryDirection.SHORT:
-            return target < (
-                entry_price - self.minimum_distance
-            )
+            return target_price < entry_price
 
+        # Unknown directions cannot have valid targets.
         return False
 
     def _calculate_quality_score(
@@ -636,48 +769,58 @@ class TakeProfitIntelligenceEngine:
         risk_reward_ratio: float,
         method: TakeProfitMethod,
     ) -> float:
+        """Calculate deterministic take-profit quality."""
+
+        # Establish a base score from RR.
         if risk_reward_ratio >= 4.0:
-            score = 85.0
+            score = 90.0
 
         elif risk_reward_ratio >= 3.0:
-            score = 75.0
+            score = 80.0
 
         elif risk_reward_ratio >= 2.0:
-            score = 60.0
+            score = 70.0
 
         else:
             score = 40.0
 
-        if method is TakeProfitMethod.STRUCTURE:
+        # Reward market-structure agreement.
+        if method is TakeProfitMethod.HYBRID:
+            score += 10.0
+
+        # Reward individual structure/SR/trendline targets.
+        elif method in (
+            TakeProfitMethod.STRUCTURE,
+            TakeProfitMethod.SUPPORT_RESISTANCE,
+            TakeProfitMethod.TRENDLINE,
+        ):
             score += 5.0
 
-        elif method is TakeProfitMethod.SUPPORT_RESISTANCE:
-            score += 5.0
-
-        elif method is TakeProfitMethod.TRENDLINE:
-            score += 5.0
-
-        elif method is TakeProfitMethod.HYBRID:
-            score += 15.0
-
+        # Never allow scores above 100.
         return min(
-            100.0,
             score,
+            100.0,
         )
 
     def _quality_from_score(
         self,
         score: float,
     ) -> TakeProfitQuality:
+        """Convert quality score into TakeProfitQuality."""
+
+        # Highest-quality classification.
         if score >= self.excellent_score:
             return TakeProfitQuality.EXCELLENT
 
+        # Good-quality classification.
         if score >= self.good_score:
             return TakeProfitQuality.GOOD
 
+        # Acceptable-quality classification.
         if score >= self.acceptable_score:
             return TakeProfitQuality.ACCEPTABLE
 
+        # Anything below acceptable is poor.
         return TakeProfitQuality.POOR
 
     def _invalid_result(
@@ -690,6 +833,17 @@ class TakeProfitIntelligenceEngine:
         reason_type: TakeProfitReasonType,
         message: str,
     ) -> TakeProfitModel:
+        """Build a deterministic invalid TP result."""
+
+        # Preserve useful stop-loss/risk information where available.
+        risk_distance = 0.0
+
+        if stop_loss is not None:
+            risk_distance = abs(
+                entry.entry_price - stop_loss
+            )
+
+        # Return a blocked immutable model.
         return TakeProfitModel(
             timestamp=entry.timestamp,
             symbol=entry.symbol,
@@ -708,7 +862,10 @@ class TakeProfitIntelligenceEngine:
                 )
             ),
             take_profit=None,
-            risk_distance=0.0,
+            risk_distance=round(
+                risk_distance,
+                10,
+            ),
             reward_distance=0.0,
             risk_reward_ratio=0.0,
             minimum_risk_reward=minimum_rr,
@@ -724,7 +881,7 @@ class TakeProfitIntelligenceEngine:
                 ),
             ),
             warnings=(
-                "15R does not calculate position size or account risk.",
+                "Take-profit calculation is blocked.",
             ),
         )
 
@@ -732,36 +889,39 @@ class TakeProfitIntelligenceEngine:
         self,
         entry: EntryModel,
     ) -> None:
-        if not isinstance(
-            entry,
-            EntryModel,
-        ):
+        """Validate the EntryModel contract."""
+
+        # Only EntryModel objects are supported.
+        if not isinstance(entry, EntryModel):
             raise TakeProfitIntelligenceError(
                 "entry must be an EntryModel."
             )
 
-        if (
-            not isinstance(
-                entry.symbol,
-                str,
-            )
-            or not entry.symbol.strip()
-        ):
+        # Validate symbol type.
+        if not isinstance(entry.symbol, str):
             raise TakeProfitIntelligenceError(
-                "entry symbol cannot be empty."
+                "entry.symbol must be a string."
             )
 
-        if (
-            not isinstance(
-                entry.timeframe,
-                str,
-            )
-            or not entry.timeframe.strip()
-        ):
+        # Symbol cannot be empty.
+        if not entry.symbol.strip():
             raise TakeProfitIntelligenceError(
-                "entry timeframe cannot be empty."
+                "entry.symbol cannot be empty."
             )
 
+        # Validate timeframe type.
+        if not isinstance(entry.timeframe, str):
+            raise TakeProfitIntelligenceError(
+                "entry.timeframe must be a string."
+            )
+
+        # Timeframe cannot be empty.
+        if not entry.timeframe.strip():
+            raise TakeProfitIntelligenceError(
+                "entry.timeframe cannot be empty."
+            )
+
+        # Validate EntryModel entry price.
         self._validate_price(
             entry.entry_price,
             "entry.entry_price",
@@ -772,9 +932,13 @@ class TakeProfitIntelligenceEngine:
         value: Optional[float],
         name: str,
     ) -> None:
+        """Validate an optional trading price."""
+
+        # None means that the optional target was not supplied.
         if value is None:
             return
 
+        # Otherwise validate the supplied price.
         self._validate_price(
             value,
             name,
@@ -785,79 +949,99 @@ class TakeProfitIntelligenceEngine:
         value: float,
         name: str,
     ) -> float:
-        if isinstance(
-            value,
-            bool,
-        ):
+        """
+        Validate that a trading price is numeric, finite,
+        and strictly greater than zero.
+        """
+
+        # bool is a subclass of int in Python, but it is not a price.
+        if isinstance(value, bool):
             raise TakeProfitIntelligenceError(
-                f"{name} must be a finite positive number."
+                f"{name} must be a positive finite number."
             )
 
-        if not isinstance(
-            value,
-            (int, float),
-        ):
+        # Only numeric values are accepted.
+        if not isinstance(value, (int, float)):
             raise TakeProfitIntelligenceError(
-                f"{name} must be a finite positive number."
+                f"{name} must be a positive finite number."
             )
 
-        value = float(value)
+        # Convert to float for consistent financial calculations.
+        numeric_value = float(value)
 
-        if not math.isfinite(value):
+        # Reject NaN and infinity.
+        if not math.isfinite(numeric_value):
             raise TakeProfitIntelligenceError(
-                f"{name} must be finite."
+                f"{name} must be a positive finite number."
             )
 
-        if value <= 0.0:
+        # Zero and negative prices are invalid market prices.
+        if numeric_value <= 0.0:
             raise TakeProfitIntelligenceError(
                 f"{name} must be greater than zero."
             )
 
-        return value
+        # Return the validated numeric price.
+        return numeric_value
 
     def _validate_positive(
         self,
         value: float,
         name: str,
     ) -> float:
-        if isinstance(
+        """Validate a strictly positive finite number."""
+
+        # Reject booleans explicitly.
+        if isinstance(value, bool):
+            raise TakeProfitIntelligenceError(
+                f"{name} must be greater than zero."
+            )
+
+        # Reuse finite-number validation.
+        numeric_value = self._validate_price(
             value,
-            bool,
-        ):
+            name,
+        )
+
+        # Require strictly positive values.
+        if numeric_value <= 0.0:
             raise TakeProfitIntelligenceError(
-                f"{name} must be a finite positive number."
+                f"{name} must be greater than zero."
             )
 
-        if not isinstance(
-            value,
-            (int, float),
-        ):
-            raise TakeProfitIntelligenceError(
-                f"{name} must be a finite positive number."
-            )
-
-        value = float(value)
-
-        if not math.isfinite(value) or value <= 0.0:
-            raise TakeProfitIntelligenceError(
-                f"{name} must be a finite positive number."
-            )
-
-        return value
+        return numeric_value
 
     def _validate_score(
         self,
         value: float,
         name: str,
     ) -> float:
-        value = self._validate_positive(
-            value,
-            name,
-        )
+        """Validate a quality score threshold."""
 
-        if value > 100.0:
+        # Reject booleans.
+        if isinstance(value, bool):
             raise TakeProfitIntelligenceError(
                 f"{name} must be between 0 and 100."
             )
 
-        return value
+        # Validate numeric and finite input.
+        if not isinstance(value, (int, float)):
+            raise TakeProfitIntelligenceError(
+                f"{name} must be between 0 and 100."
+            )
+
+        numeric_value = float(value)
+
+        # Reject NaN and infinity.
+        if not math.isfinite(numeric_value):
+            raise TakeProfitIntelligenceError(
+                f"{name} must be between 0 and 100."
+            )
+
+        # Score thresholds must remain within 0-100.
+        if not 0.0 <= numeric_value <= 100.0:
+            raise TakeProfitIntelligenceError(
+                f"{name} must be between 0 and 100."
+            )
+
+        return numeric_value

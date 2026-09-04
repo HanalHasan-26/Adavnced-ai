@@ -134,18 +134,20 @@ class StopLossIntelligenceEngine:
     """
     Determines technically valid stop-loss placement.
 
-    15Q responsibilities:
+    P2.14 responsibilities:
     - validate the entry model
     - resolve the entry/reference price
     - select a structural invalidation level
     - use support/resistance
     - use trendline information
     - optionally apply an ATR buffer
+    - validate minimum stop distance
+    - validate maximum technical stop distance
     - calculate stop distance
     - calculate stop distance as a percentage of entry
     - score stop-loss quality
 
-    15Q deliberately does NOT:
+    P2.14 deliberately does NOT:
     - calculate take profit
     - calculate position size
     - calculate account risk amount
@@ -153,6 +155,8 @@ class StopLossIntelligenceEngine:
     - fetch market data
     - fetch news
     - call the LLM
+
+    Account-level risk decisions belong to P2.16 Risk Engine.
     """
 
     DEFAULT_MINIMUM_DISTANCE = 0.01
@@ -172,21 +176,25 @@ class StopLossIntelligenceEngine:
         good_score: float = DEFAULT_GOOD_SCORE,
         acceptable_score: float = DEFAULT_ACCEPTABLE_SCORE,
     ) -> None:
+        # Validate the minimum technical stop distance.
         self.minimum_distance = self._validate_positive(
             minimum_distance,
             "minimum_distance",
         )
 
+        # Validate the maximum technical risk distance.
         self.maximum_risk_percent = self._validate_positive(
             maximum_risk_percent,
             "maximum_risk_percent",
         )
 
+        # Validate the ATR buffer multiplier.
         self.atr_buffer_multiplier = self._validate_non_negative(
             atr_buffer_multiplier,
             "atr_buffer_multiplier",
         )
 
+        # Validate quality thresholds.
         self.excellent_score = self._validate_score(
             excellent_score,
             "excellent_score",
@@ -202,6 +210,7 @@ class StopLossIntelligenceEngine:
             "acceptable_score",
         )
 
+        # Ensure quality thresholds are ordered correctly.
         if not (
             self.acceptable_score
             <= self.good_score
@@ -222,8 +231,10 @@ class StopLossIntelligenceEngine:
         atr_value: float | None = None,
         reference_price: float | None = None,
     ) -> StopLossModel:
+        # Validate the supplied entry model.
         self._validate_entry(entry)
 
+        # Validate every optional numeric input.
         self._validate_optional_values(
             {
                 "structural_level": structural_level,
@@ -235,6 +246,7 @@ class StopLossIntelligenceEngine:
             }
         )
 
+        # Resolve the price against which the stop is measured.
         entry_price = self._resolve_entry_price(
             entry=entry,
             explicit_reference_price=reference_price,
@@ -242,6 +254,7 @@ class StopLossIntelligenceEngine:
 
         direction = entry.direction
 
+        # Only LONG and SHORT entries can have a directional stop.
         if direction not in (
             EntryDirection.LONG,
             EntryDirection.SHORT,
@@ -261,17 +274,21 @@ class StopLossIntelligenceEngine:
                 ),
             )
 
-        stop_loss, method, structural_reference = (
-            self._determine_stop_loss(
-                direction=direction,
-                entry_price=entry_price,
-                structural_level=structural_level,
-                support_level=support_level,
-                resistance_level=resistance_level,
-                trendline_level=trendline_level,
-            )
+        # Select the best available technical stop reference.
+        (
+            stop_loss,
+            method,
+            structural_reference,
+        ) = self._determine_stop_loss(
+            direction=direction,
+            entry_price=entry_price,
+            structural_level=structural_level,
+            support_level=support_level,
+            resistance_level=resistance_level,
+            trendline_level=trendline_level,
         )
 
+        # No usable technical reference means no usable stop.
         if stop_loss is None:
             return self._blocked_result(
                 entry=entry,
@@ -288,26 +305,41 @@ class StopLossIntelligenceEngine:
                 ),
             )
 
+        # Apply the optional volatility buffer.
         stop_loss, atr_buffer = self._apply_atr_buffer(
             direction=direction,
             stop_loss=stop_loss,
             atr_value=atr_value,
         )
 
+        # Validate the stop's geometric relationship to entry.
         valid, validation_reason = self._validate_stop_position(
             direction=direction,
             entry_price=entry_price,
             stop_loss=stop_loss,
         )
 
+        # Calculate the absolute stop distance.
         risk_distance = abs(
             entry_price - stop_loss
         )
 
+        # Calculate stop distance as a percentage of entry.
         risk_percent = (
             risk_distance / entry_price
         ) * 100.0
 
+        # IMPORTANT:
+        # Maximum technical stop distance is part of P2.14.
+        # If the stop is too far away, it is technically invalid.
+        if (
+            valid
+            and risk_percent > self.maximum_risk_percent
+        ):
+            valid = False
+            validation_reason = StopLossReasonType.STOP_TOO_FAR
+
+        # Calculate the quality score after all technical validation.
         quality_score = self._calculate_quality_score(
             method=method,
             direction=direction,
@@ -320,11 +352,13 @@ class StopLossIntelligenceEngine:
             risk_percent=risk_percent,
         )
 
+        # Convert the score into a quality classification.
         quality = self._classify_quality(
             quality_score=quality_score,
             valid=valid,
         )
 
+        # Build the complete audit trail.
         reasons = self._build_reasons(
             direction=direction,
             method=method,
@@ -340,6 +374,7 @@ class StopLossIntelligenceEngine:
             quality=quality,
         )
 
+        # Build human-readable warnings.
         warnings = self._build_warnings(
             risk_percent=risk_percent,
             atr_value=atr_value,
@@ -347,6 +382,7 @@ class StopLossIntelligenceEngine:
             quality=quality,
         )
 
+        # A stop is ready only when all technical requirements pass.
         stop_loss_ready = (
             valid
             and quality
@@ -372,16 +408,14 @@ class StopLossIntelligenceEngine:
                 if valid
                 else None
             ),
-            risk_distance=(
-                round(risk_distance, 10)
-                if valid
-                else None
-            ),
-            risk_percent_of_entry=(
-                round(risk_percent, 6)
-                if valid
-                else None
-            ),
+            risk_distance=round(
+            risk_distance,
+            10,
+        ),
+        risk_percent_of_entry=round(
+            risk_percent,
+            6,
+        ),
             method=method,
             quality=quality,
             quality_score=round(
@@ -413,6 +447,8 @@ class StopLossIntelligenceEngine:
         atr_value: float | None = None,
         reference_price: float | None = None,
     ) -> StopLossModel:
+        # This wrapper is intentionally restricted to the first
+        # Phase 2 instrument: XAUUSD.
         if entry.symbol != "XAUUSD":
             raise StopLossIntelligenceError(
                 "entry must use XAUUSD."
@@ -440,24 +476,23 @@ class StopLossIntelligenceEngine:
         1. Explicit reference_price supplied to analyze()
         2. EntryModel.entry_price
         3. EntryModel.reference_price
-
-        The explicit argument is preferred because later live/historical
-        integrations can provide the actual market price without changing
-        the EntryModel contract.
         """
 
+        # Explicit analysis-time price has the highest priority.
         if explicit_reference_price is not None:
             return self._positive_price(
                 explicit_reference_price,
                 "reference_price",
             )
 
+        # Prefer the actual entry price when available.
         if entry.entry_price is not None:
             price = float(entry.entry_price)
 
             if isfinite(price) and price > 0.0:
                 return price
 
+        # Fall back to the EntryModel reference price.
         return self._positive_price(
             entry.reference_price,
             "entry reference_price",
@@ -476,11 +511,13 @@ class StopLossIntelligenceEngine:
         StopLossMethod,
         float | None,
     ]:
+        # LONG trades require the stop below entry.
         if direction is EntryDirection.LONG:
             candidates: list[
                 tuple[float, StopLossMethod]
             ] = []
 
+            # Structural invalidation candidate.
             if structural_level is not None:
                 if structural_level < entry_price:
                     candidates.append(
@@ -490,6 +527,7 @@ class StopLossIntelligenceEngine:
                         )
                     )
 
+            # Support candidate.
             if support_level is not None:
                 if support_level < entry_price:
                     candidates.append(
@@ -499,6 +537,7 @@ class StopLossIntelligenceEngine:
                         )
                     )
 
+            # Trendline candidate.
             if trendline_level is not None:
                 if trendline_level < entry_price:
                     candidates.append(
@@ -508,6 +547,7 @@ class StopLossIntelligenceEngine:
                         )
                     )
 
+            # No valid long-side reference.
             if not candidates:
                 return (
                     None,
@@ -515,11 +555,14 @@ class StopLossIntelligenceEngine:
                     None,
                 )
 
+            # Choose the nearest valid level below entry.
             selected_price, selected_method = max(
                 candidates,
                 key=lambda item: item[0],
             )
 
+            # If structure and support agree closely,
+            # classify the stop as a hybrid confluence stop.
             if (
                 structural_level is not None
                 and support_level is not None
@@ -537,9 +580,11 @@ class StopLossIntelligenceEngine:
                 selected_price,
             )
 
+        # SHORT trades require the stop above entry.
         if direction is EntryDirection.SHORT:
             candidates = []
 
+            # Structural invalidation candidate.
             if structural_level is not None:
                 if structural_level > entry_price:
                     candidates.append(
@@ -549,6 +594,7 @@ class StopLossIntelligenceEngine:
                         )
                     )
 
+            # Resistance candidate.
             if resistance_level is not None:
                 if resistance_level > entry_price:
                     candidates.append(
@@ -558,6 +604,7 @@ class StopLossIntelligenceEngine:
                         )
                     )
 
+            # Trendline candidate.
             if trendline_level is not None:
                 if trendline_level > entry_price:
                     candidates.append(
@@ -567,6 +614,7 @@ class StopLossIntelligenceEngine:
                         )
                     )
 
+            # No valid short-side reference.
             if not candidates:
                 return (
                     None,
@@ -574,11 +622,14 @@ class StopLossIntelligenceEngine:
                     None,
                 )
 
+            # Choose the nearest valid level above entry.
             selected_price, selected_method = min(
                 candidates,
                 key=lambda item: item[0],
             )
 
+            # If structure and resistance agree closely,
+            # classify the stop as a hybrid confluence stop.
             if (
                 structural_level is not None
                 and resistance_level is not None
@@ -596,6 +647,7 @@ class StopLossIntelligenceEngine:
                 selected_price,
             )
 
+        # Defensive fallback for unsupported directions.
         return (
             None,
             StopLossMethod.UNKNOWN,
@@ -608,23 +660,27 @@ class StopLossIntelligenceEngine:
         stop_loss: float,
         atr_value: float | None,
     ) -> tuple[float, float]:
+        # No ATR means no volatility buffer.
         if atr_value is None:
             return (
                 stop_loss,
                 0.0,
             )
 
+        # Calculate the actual ATR price buffer.
         buffer = (
             atr_value
             * self.atr_buffer_multiplier
         )
 
+        # Long stops are moved farther below entry.
         if direction is EntryDirection.LONG:
             return (
                 stop_loss - buffer,
                 buffer,
             )
 
+        # Short stops are moved farther above entry.
         if direction is EntryDirection.SHORT:
             return (
                 stop_loss + buffer,
@@ -645,16 +701,19 @@ class StopLossIntelligenceEngine:
         bool,
         StopLossReasonType,
     ]:
+        # Calculate the absolute distance first.
         distance = abs(
             entry_price - stop_loss
         )
 
+        # A stop closer than the minimum distance is invalid.
         if distance < self.minimum_distance:
             return (
                 False,
                 StopLossReasonType.STOP_TOO_CLOSE,
             )
 
+        # LONG stop must be strictly below entry.
         if direction is EntryDirection.LONG:
             if stop_loss >= entry_price:
                 return (
@@ -662,6 +721,7 @@ class StopLossIntelligenceEngine:
                     StopLossReasonType.STOP_WRONG_SIDE,
                 )
 
+        # SHORT stop must be strictly above entry.
         elif direction is EntryDirection.SHORT:
             if stop_loss <= entry_price:
                 return (
@@ -686,11 +746,13 @@ class StopLossIntelligenceEngine:
         valid: bool,
         risk_percent: float,
     ) -> float:
+        # Invalid stops receive no quality score.
         if not valid:
             return 0.0
 
         score = 40.0
 
+        # Hybrid agreement receives the highest method bonus.
         if method is StopLossMethod.HYBRID:
             score += 35.0
 
@@ -706,23 +768,29 @@ class StopLossIntelligenceEngine:
         elif method is StopLossMethod.ATR_BUFFER:
             score += 15.0
 
+        # Structural reference strengthens the technical basis.
         if structural_reference is not None:
             score += 5.0
 
+        # Long-side support adds confirmation.
         if direction is EntryDirection.LONG:
             if support_level is not None:
                 score += 5.0
 
+        # Short-side resistance adds confirmation.
         if direction is EntryDirection.SHORT:
             if resistance_level is not None:
                 score += 5.0
 
+        # Trendline information adds confirmation.
         if trendline_level is not None:
             score += 5.0
 
+        # ATR information adds volatility context.
         if atr_value is not None:
             score += 5.0
 
+        # Excessive risk lowers the score.
         if risk_percent > self.maximum_risk_percent:
             score -= 30.0
 
@@ -731,6 +799,7 @@ class StopLossIntelligenceEngine:
         ):
             score -= 15.0
 
+        # Keep the score within the public 0-100 contract.
         return max(
             0.0,
             min(100.0, score),
@@ -741,6 +810,7 @@ class StopLossIntelligenceEngine:
         quality_score: float,
         valid: bool,
     ) -> StopLossQuality:
+        # Invalid technical stops are always INVALID.
         if not valid:
             return StopLossQuality.INVALID
 
@@ -772,6 +842,7 @@ class StopLossIntelligenceEngine:
     ) -> list[StopLossReason]:
         reasons: list[StopLossReason] = []
 
+        # Record trade direction.
         if direction is EntryDirection.LONG:
             reasons.append(
                 StopLossReason(
@@ -788,6 +859,7 @@ class StopLossIntelligenceEngine:
                 )
             )
 
+        # Record structural reference.
         if structural_reference is not None:
             reasons.append(
                 StopLossReason(
@@ -800,6 +872,7 @@ class StopLossIntelligenceEngine:
                 )
             )
 
+        # Record long-side support.
         if (
             direction is EntryDirection.LONG
             and support_level is not None
@@ -811,6 +884,7 @@ class StopLossIntelligenceEngine:
                 )
             )
 
+        # Record short-side resistance.
         if (
             direction is EntryDirection.SHORT
             and resistance_level is not None
@@ -822,6 +896,7 @@ class StopLossIntelligenceEngine:
                 )
             )
 
+        # Record trendline information.
         if trendline_level is not None:
             reasons.append(
                 StopLossReason(
@@ -834,6 +909,7 @@ class StopLossIntelligenceEngine:
                 )
             )
 
+        # Record ATR buffering.
         if (
             atr_value is not None
             and atr_buffer > 0.0
@@ -845,6 +921,7 @@ class StopLossIntelligenceEngine:
                 )
             )
 
+        # Record hybrid agreement.
         if method is StopLossMethod.HYBRID:
             reasons.append(
                 StopLossReason(
@@ -853,6 +930,7 @@ class StopLossIntelligenceEngine:
                 )
             )
 
+        # Record directional validity.
         if valid:
             reasons.append(
                 StopLossReason(
@@ -866,6 +944,7 @@ class StopLossIntelligenceEngine:
             )
 
         else:
+            # Record the exact technical validation failure.
             reasons.append(
                 StopLossReason(
                     validation_reason,
@@ -873,6 +952,7 @@ class StopLossIntelligenceEngine:
                 )
             )
 
+        # Record maximum-risk boundary status.
         if risk_percent <= self.maximum_risk_percent:
             reasons.append(
                 StopLossReason(
@@ -895,6 +975,7 @@ class StopLossIntelligenceEngine:
                 )
             )
 
+        # Record strong technical support.
         if quality in (
             StopLossQuality.GOOD,
             StopLossQuality.EXCELLENT,
@@ -917,26 +998,32 @@ class StopLossIntelligenceEngine:
     ) -> list[str]:
         warnings: list[str] = []
 
+        # Warn whenever the stop is technically invalid.
         if not valid:
             warnings.append(
                 "Stop-loss is not technically valid."
             )
 
+        # Warn when the stop exceeds the technical risk boundary.
         if risk_percent > self.maximum_risk_percent:
             warnings.append(
-                "Stop-loss distance exceeds the configured maximum risk percentage."
+                "Stop-loss distance exceeds the configured "
+                "maximum risk percentage."
             )
 
+        # Warn when no ATR context was provided.
         if atr_value is None:
             warnings.append(
                 "ATR was not supplied; no ATR buffer was applied."
             )
 
+        # Warn when the resulting quality is weak.
         if quality is StopLossQuality.WEAK:
             warnings.append(
                 "Stop-loss quality is weak."
             )
 
+        # Preserve the P2.14/P2.16 separation contract.
         warnings.append(
             "15Q does not calculate position size or take profit."
         )
@@ -955,6 +1042,8 @@ class StopLossIntelligenceEngine:
         reason_type: StopLossReasonType,
         message: str,
     ) -> StopLossModel:
+        # Return an immutable blocked result when a usable stop
+        # cannot be generated.
         return StopLossModel(
             timestamp=entry.timestamp,
             symbol=entry.symbol,
@@ -998,11 +1087,13 @@ class StopLossIntelligenceEngine:
     def _validate_entry(
         entry: EntryModel,
     ) -> None:
+        # Validate the EntryModel type.
         if not isinstance(entry, EntryModel):
             raise StopLossIntelligenceError(
                 "entry must be an EntryModel."
             )
 
+        # Validate symbol.
         if not isinstance(entry.symbol, str):
             raise StopLossIntelligenceError(
                 "entry symbol must be a string."
@@ -1013,6 +1104,7 @@ class StopLossIntelligenceEngine:
                 "entry symbol cannot be empty."
             )
 
+        # Validate timeframe.
         if not isinstance(entry.timeframe, str):
             raise StopLossIntelligenceError(
                 "entry timeframe must be a string."
@@ -1023,6 +1115,7 @@ class StopLossIntelligenceEngine:
                 "entry timeframe cannot be empty."
             )
 
+        # Validate supported directions.
         if entry.direction not in (
             EntryDirection.LONG,
             EntryDirection.SHORT,
@@ -1033,6 +1126,7 @@ class StopLossIntelligenceEngine:
                 "entry direction is invalid."
             )
 
+        # Validate the EntryModel reference price.
         if not isinstance(
             entry.reference_price,
             (int, float),
@@ -1055,15 +1149,18 @@ class StopLossIntelligenceEngine:
     def _validate_optional_values(
         values: dict[str, float | None],
     ) -> None:
+        # Validate every optional numeric input.
         for name, value in values.items():
             if value is None:
                 continue
 
+            # bool is technically an int in Python, so explicitly reject it.
             if isinstance(value, bool):
                 raise StopLossIntelligenceError(
                     f"{name} cannot be boolean."
                 )
 
+            # Reject non-numeric values.
             if not isinstance(
                 value,
                 (int, float),
@@ -1074,17 +1171,20 @@ class StopLossIntelligenceEngine:
 
             value = float(value)
 
+            # Reject NaN and infinity.
             if not isfinite(value):
                 raise StopLossIntelligenceError(
                     f"{name} must be finite."
                 )
 
+            # ATR must be strictly positive.
             if name == "atr_value":
                 if value <= 0.0:
                     raise StopLossIntelligenceError(
                         "atr_value must be greater than zero."
                     )
 
+            # Price/level inputs must also be strictly positive.
             elif value <= 0.0:
                 raise StopLossIntelligenceError(
                     f"{name} must be greater than zero."
@@ -1095,8 +1195,10 @@ class StopLossIntelligenceEngine:
         value: float,
         name: str,
     ) -> float:
+        # Convert to float for consistent numeric behavior.
         value = float(value)
 
+        # Reject invalid price values.
         if not isfinite(value) or value <= 0.0:
             raise StopLossIntelligenceError(
                 f"{name} must be finite and greater than zero."
@@ -1109,11 +1211,13 @@ class StopLossIntelligenceEngine:
         value: float,
         name: str,
     ) -> float:
+        # Reject boolean values.
         if isinstance(value, bool):
             raise StopLossIntelligenceError(
                 f"{name} cannot be boolean."
             )
 
+        # Reject non-numeric values.
         if not isinstance(
             value,
             (int, float),
@@ -1124,6 +1228,7 @@ class StopLossIntelligenceEngine:
 
         value = float(value)
 
+        # Positive configuration values must be finite and > 0.
         if not isfinite(value) or value <= 0.0:
             raise StopLossIntelligenceError(
                 f"{name} must be greater than zero."
@@ -1136,11 +1241,13 @@ class StopLossIntelligenceEngine:
         value: float,
         name: str,
     ) -> float:
+        # Reject boolean values.
         if isinstance(value, bool):
             raise StopLossIntelligenceError(
                 f"{name} cannot be boolean."
             )
 
+        # Reject non-numeric values.
         if not isinstance(
             value,
             (int, float),
@@ -1151,6 +1258,7 @@ class StopLossIntelligenceEngine:
 
         value = float(value)
 
+        # Non-negative configuration values may be zero.
         if not isfinite(value) or value < 0.0:
             raise StopLossIntelligenceError(
                 f"{name} must be finite and non-negative."
@@ -1163,11 +1271,13 @@ class StopLossIntelligenceEngine:
         value: float,
         name: str,
     ) -> float:
+        # Reject boolean values.
         if isinstance(value, bool):
             raise StopLossIntelligenceError(
                 f"{name} cannot be boolean."
             )
 
+        # Reject non-numeric values.
         if not isinstance(
             value,
             (int, float),
@@ -1178,11 +1288,13 @@ class StopLossIntelligenceEngine:
 
         value = float(value)
 
+        # Quality scores must be finite.
         if not isfinite(value):
             raise StopLossIntelligenceError(
                 f"{name} must be finite."
             )
 
+        # Quality scores are constrained to 0-100.
         if value < 0.0 or value > 100.0:
             raise StopLossIntelligenceError(
                 f"{name} must be between 0 and 100."
