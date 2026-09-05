@@ -219,7 +219,96 @@ class EventDirectionEngine:
             reasons=tuple(reasons),
             sufficient_data=True,
         )
+    def analyze_at(
+        self,
+        event: EconomicEvent,
+        *,
+        decision_timestamp,
+        target: DirectionTarget = DirectionTarget.XAUUSD,
+    ) -> EventDirectionResult:
+        """
+        Analyze an economic event using only information available
+        at the supplied historical decision timestamp.
 
+        The event timestamp represents the scheduled/release time.
+
+        Before the release time:
+        - actual must not be used.
+        - directional surprise must remain unknown.
+        - the engine must not leak future information.
+
+        At or after the release time:
+        - the stored actual value may be used if available.
+
+        This method is specifically intended for historical
+        backtesting and walk-forward evaluation.
+        """
+
+        # Validate that the event itself and requested target are valid.
+        self._validate_inputs(
+            event=event,
+            target=target,
+        )
+
+        # Validate the historical decision timestamp explicitly.
+        from datetime import datetime
+
+        if not isinstance(
+            decision_timestamp,
+            datetime,
+        ):
+            raise EventDirectionError(
+                "decision_timestamp must be a datetime."
+            )
+
+        # Require matching timezone semantics so that the comparison
+        # cannot silently mix naive and timezone-aware timestamps.
+        if (
+            event.timestamp.tzinfo
+            != decision_timestamp.tzinfo
+        ):
+            raise EventDirectionError(
+                "event and decision timestamps must use the same timezone."
+            )
+
+        # If the decision occurs before the economic release,
+        # the actual value is future information and must be hidden.
+        if decision_timestamp < event.timestamp:
+            return self._unknown_result(
+                event=event,
+                target=target,
+                reason_type=EventDirectionReasonType.NO_ACTUAL,
+                message=(
+                    "The decision occurs before the event release; "
+                    "actual information is not yet available."
+                ),
+            )
+
+        # Once the release time has arrived, use the normal
+        # directional analysis because the actual may legitimately
+        # be available to the historical decision.
+        return self.analyze(
+            event,
+            target=target,
+        )
+    def analyze_xauusd_at(
+        self,
+        event: EconomicEvent,
+        *,
+        decision_timestamp,
+    ) -> EventDirectionResult:
+        """
+        Analyze XAUUSD event direction using only information
+        available at the historical decision timestamp.
+        """
+
+        # Delegate to the historical-safe analysis method while
+        # explicitly selecting XAUUSD as the target instrument.
+        return self.analyze_at(
+            event,
+            decision_timestamp=decision_timestamp,
+            target=DirectionTarget.XAUUSD,
+        )
     def analyze_xauusd(
         self,
         event: EconomicEvent,
